@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { convertDialect, DIALECTS, guessDialect, listDialectSongs, type DialectConvertResult, type DialectId } from '../engine/dialects';
-import { readUtf8 } from '../utils/files';
+import { readTextUtf8OrSjis } from '../utils/files';
 import { Modal } from './Modal';
 
 interface Props {
@@ -31,11 +31,13 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
   const [bestEffort, setBestEffort] = useState(false);
   const [result, setResult] = useState<DialectConvertResult | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [fileNote, setFileNote] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const songs = useMemo(() => listDialectSongs(text, dialect), [text, dialect]);
   const guessed = useMemo(() => guessDialect(text), [text]);
 
   const changeText = (t: string) => {
+    setFileNote(null);
     setText(t);
     setResult(null);
     setSongIndex(0);
@@ -80,14 +82,23 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
             const f = e.target.files?.[0];
             e.target.value = '';
             if (!f) return;
-            readUtf8(f).then(
-              (t) => (setFileError(null), changeText(t)),
-              () => setFileError(`「${f.name}」は UTF-8 のテキストとして読めませんでした。`),
+            readTextUtf8OrSjis(f).then(
+              ({ text: t, encoding }) => {
+                setFileError(null);
+                changeText(t);
+                if (encoding === 'shift_jis') setFileNote(`「${f.name}」を Shift_JIS のテキストとして読み込みました。`);
+              },
+              () => setFileError(`「${f.name}」は UTF-8・Shift_JIS のどちらのテキストとしても読めませんでした。`),
             );
           }}
         />
       </div>
       {fileError && <p className="msg-error small">✖ {fileError}</p>}
+      {fileNote && (
+        <p className="muted small" data-testid="dialect-file-note">
+          {fileNote}
+        </p>
+      )}
       <textarea
         className="dialect-input"
         aria-label="変換する MML"

@@ -10,6 +10,8 @@ export interface ExprEnv {
   lookup(name: string): SValue | undefined;
   /** function call with raw argument texts; undefined when unknown */
   call(name: string, args: string[]): SValue | undefined;
+  /** `!4`, `!8.`, `!1^1`: a note length as a number of steps; undefined when unknown */
+  noteLength?(text: string): number | undefined;
 }
 
 type Tok = { k: 'num'; v: number } | { k: 'str'; v: string } | { k: 'id'; v: string; args?: string[] } | { k: 'op'; v: string };
@@ -32,7 +34,7 @@ function splitArgs(s: string): string[] {
   return out;
 }
 
-function tokenize(s: string): Tok[] {
+function tokenize(s: string, env?: ExprEnv): Tok[] {
   const t: Tok[] = [];
   let i = 0;
   while (i < s.length) {
@@ -45,6 +47,15 @@ function tokenize(s: string): Tok[] {
       let n = '';
       while (i < s.length && (/[0-9]/.test(s[i]) || (s[i] === '.' && /[0-9]/.test(s[i + 1] ?? '')))) n += s[i++];
       t.push({ k: 'num', v: Number(n) });
+      continue;
+    }
+    if (c === '!' && /[0-9]/.test(s[i + 1] ?? '')) {
+      let len = '';
+      i++;
+      while (i < s.length && /[0-9.^]/.test(s[i])) len += s[i++];
+      const v = env?.noteLength?.(len);
+      if (v === undefined) throw new ExprError(`音長 !${len} を読めません`);
+      t.push({ k: 'num', v });
       continue;
     }
     if (c === '$') {
@@ -120,7 +131,7 @@ const toNum = (v: SValue): number => {
 };
 
 export function evalExpr(text: string, env: ExprEnv): SValue {
-  const toks = tokenize(text);
+  const toks = tokenize(text, env);
   if (toks.length === 0) throw new ExprError('式がありません');
   let pos = 0;
   const primary = (): SValue => {

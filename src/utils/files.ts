@@ -23,3 +23,18 @@ export async function readUtf8(file: File): Promise<string> {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
+
+/**
+ * Text in UTF-8, or Shift_JIS when it is not valid UTF-8 (MML written for the Windows versions of
+ * other players, e.g. the Sakura MML board downloads). Throws when neither decodes.
+ */
+export async function readTextUtf8OrSjis(file: File): Promise<{ text: string; encoding: 'utf-8' | 'shift_jis' }> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return { text: text.charCodeAt(0) === 0xfeff ? text.slice(1) : text, encoding: 'utf-8' };
+  } catch {
+    const text = new TextDecoder('shift_jis', { fatal: true }).decode(bytes);
+    return { text, encoding: 'shift_jis' };
+  }
+}

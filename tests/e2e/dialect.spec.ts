@@ -96,3 +96,18 @@ test('picosakura programs show the MIDI export hint; best-effort mode skips what
   await dialog.getByRole('button', { name: 'エディタに反映' }).click();
   await expect(page.getByText('問題はありません。')).toBeVisible();
 });
+
+test('a Shift_JIS text file (Sakura board download) is read and converted', async ({ page }) => {
+  // "曲名{"テスト"}\nトラック１ ドレミ" in Shift_JIS
+  const sjis = Buffer.from([
+    0x8b, 0xc8, 0x96, 0xbc, 0x7b, 0x22, 0x83, 0x65, 0x83, 0x58, 0x83, 0x67, 0x22, 0x7d, 0x0d, 0x0a, 0x83, 0x67, 0x83, 0x89, 0x83, 0x62, 0x83, 0x4e,
+    0x82, 0x50, 0x20, 0x83, 0x68, 0x83, 0x8c, 0x83, 0x7e,
+  ]);
+  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByTestId('dialect-file').setInputFiles({ name: 'sakura.mml', mimeType: 'text/plain', buffer: sjis });
+  await expect(dialog.getByTestId('dialect-file-note')).toContainText('Shift_JIS');
+  await expect(dialog.getByLabel('変換する MML')).toHaveValue(/トラック１ ドレミ/);
+  await dialog.getByRole('button', { name: '変換', exact: true }).click();
+  await expect(dialog.getByTestId('dialect-status')).toContainText('1 トラック・3 音');
+});

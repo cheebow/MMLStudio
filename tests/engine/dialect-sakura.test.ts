@@ -317,6 +317,9 @@ describe('picosakura programs L80–L89', () => {
     expect(n.map((x) => x.gateTicks)).toEqual([120, 168, 216]);
     expect(pitches('Int I=0 While(I<10){I++ If(I==3){Break} c}')).toEqual([60, 60]);
     expect(pitches('FOR(INT B;B<2;B++){d}')).toEqual([62, 62]);
+    // Exit leaves the loop (not the song); outside a loop it returns from the function
+    expect(pitches('For(Int I=0;I<5;I++){ If(I==2){Exit} c } d')).toEqual([60, 60, 62]);
+    expect(pitches('Function F(){ c Exit d } F e')).toEqual([60, 64]);
   });
 
   it('L84 Str inside chords, loop separators, `[N ...]` with an Int constant', () => {
@@ -388,5 +391,123 @@ TR=1 HAM2({DL=BGN MN}) TR=2 DL=BGN RT TR=10 l16 DL=BGN [8O1;r]`);
     expect(notes(song).filter((n) => n.channel === 0)).toHaveLength(16);
     expect(notes(song).filter((n) => n.channel === 1)).toHaveLength(12);
     expect(notes(song).filter((n) => n.channel === 9)).toHaveLength(16);
+  });
+});
+
+// SPEC 4.5.13: notations found in real Sakura MML (Sakura v1/v2 era and current), self-made inputs.
+describe('picosakura real-world notations L90–L99', () => {
+  const ticks = (text: string) => notes(conv(text).song).map((n) => [n.pitch, n.startTick, n.durationTicks]);
+
+  it('L90 {"…"} is a string only when `"}` closes it; quoted Str values are MML', () => {
+    // `"` inside Div{…} are one-shot octave marks
+    expect(pitches('Div{"e"g"a}4')).toEqual([52, 55, 57]);
+    expect(pitches('Str C1={"c4.cc2"} C1')).toEqual([60, 60, 60]);
+    expect(pitches('Str V="v80" V c')).toEqual([60]);
+    expect(notes(conv('Str V="v80" V c').song)[0].velocity).toBe(80);
+    expect(conv('曲名={"テスト"} c').mml).toContain('picosakura から変換: テスト');
+  });
+
+  it('L91 `f+16` is F# sixteenth; `8+8` adds, `2.-16` subtracts, `+` may continue on the next line', () => {
+    expect(ticks('f+16 c8+8 c2.-16')).toEqual([
+      [66, 0, 120],
+      [60, 120, 480],
+      [60, 600, 1320],
+    ]);
+    expect(ticks('c1+1\n  +1')).toEqual([[60, 0, 5760]]);
+  });
+
+  it('L92 `c0e0g4` (v1/v2 chords): length-0 notes sound with the next note', () => {
+    expect(ticks('c0e0g4 d')).toEqual([
+      [60, 0, 480],
+      [64, 0, 480],
+      [67, 0, 480],
+      [62, 480, 480],
+    ]);
+    expect(ticks("'ce'0 g8")).toEqual([
+      [60, 0, 240],
+      [64, 0, 240],
+      [67, 0, 240],
+    ]);
+  });
+
+  it('L93 `r-4` moves the time pointer back (`r-1^1` too)', () => {
+    expect(ticks('c2 r-2 e2')).toEqual([
+      [60, 0, 960],
+      [64, 0, 960],
+    ]);
+    expect(ticks('c1 c1 r-1^1 e1')).toEqual([
+      [60, 0, 1920],
+      [64, 0, 1920],
+      [60, 1920, 1920],
+    ]);
+  });
+
+  it('L94 `~{name}={value}` defines a sutoton word, overriding the built-in one', () => {
+    expect(pitches('~{か}={n33,} トラック10 かか')).toEqual([33, 33]);
+    expect(pitches('~{ど}={e} どド')).toEqual([64, 60]);
+    expect(pitches('~{じゅー}={c} ドレミじゅーレミ')).toEqual([60, 62, 64, 60, 62, 64]);
+  });
+
+  it('L95 voice / drum name constants', () => {
+    const prog = (t: string) => conv(t).song.tracks[0].events.find((e) => e.kind === 'program');
+    expect(prog('@BrightPiano c')).toMatchObject({ program: 1 });
+    expect(prog('音色(PickBass) c')).toMatchObject({ program: 34 });
+    expect(prog('音色CelestaStrings c')).toMatchObject({ program: 8 });
+    expect(prog('Voice(SteelcGuitar) c')).toMatchObject({ program: 25 });
+    expect(prog('@Clarinet c')).toMatchObject({ program: 71 });
+    expect(prog('@Gunshot c')).toMatchObject({ program: 127 });
+    expect(pitches('TR(10) n(Kick2) n(OpenHiHat) Int K=CrashCymbal1 n(K)')).toEqual([35, 46, 49]);
+  });
+
+  it('L96 OctaveUnison / Unison5th / Unison (predefined macros)', () => {
+    expect(ticks('OctaveUnison{c} d')).toEqual([
+      [60, 0, 480],
+      [72, 0, 480],
+      [62, 480, 480],
+    ]);
+    expect(pitches('Unison5th(c)')).toEqual([60, 67]);
+    expect(pitches('Unison{c},4')).toEqual([60, 64]);
+  });
+
+  it('L97 Play(A,B): the n-th Str on track n from the current time, then the tracks are in sync', () => {
+    const { song } = conv('Str A={c1 c1} Str B={e1} Play(A,B) TR(2) g');
+    expect(notes(song).map((n) => [n.channel, n.pitch, n.startTick])).toEqual([
+      [0, 60, 0],
+      [0, 60, 1920],
+      [1, 64, 0],
+      [1, 67, 3840],
+    ]);
+  });
+
+  it('L98 chord details, gates over 100 %, clamping, `!4`, `[(3) …]`, `t(0)`, `(Sub)` in rhythm blocks', () => {
+    // per-note lengths inside a chord give the chord its length; per-note parameters are dropped
+    expect(ticks("'g2e-2'r 'n38 n51,,,30'4")).toEqual([
+      [63, 0, 960],
+      [67, 0, 960],
+      [38, 1440, 480],
+      [51, 1440, 480],
+    ]);
+    // q200: the gate is twice the note length (written as q%N)
+    const g = notes(conv('q200 c4 d8').song);
+    expect(g.map((n) => n.gateTicks)).toEqual([960, 480]);
+    expect(notes(conv('v130 c').song)[0].velocity).toBe(127);
+    expect(notes(conv('Function F(L){ r%(L) } F(!2) c').song)[0].startTick).toBe(960);
+    expect(pitches('[(3) c]')).toEqual([60, 60, 60]);
+    expect(pitches('t(0) c')).toEqual([60]);
+    expect(ticks('TR(10) $b{n36,} $h{n42,} Rhythm{ (Sub){h8h8} b4 }')).toEqual([
+      [36, 0, 480],
+      [42, 0, 240],
+      [42, 240, 240],
+    ]);
+  });
+
+  it('L99 best-effort: undefined macros and out-of-range notes are skipped with warnings', () => {
+    expect(err('#X c')?.code).toBe('E_SAKURA_MACRO');
+    const a = best('#X c');
+    expect(notes(a.song).map((n) => n.pitch)).toEqual([60]);
+    expect(err('o10 b c')?.code).toBe('E_SAKURA_RANGE');
+    const b = best('o10 b c');
+    expect(notes(b.song).map((n) => [n.pitch, n.startTick])).toEqual([[120, 480]]);
+    expect(b.r.ok && b.r.summary.approximate).toBe(true);
   });
 });

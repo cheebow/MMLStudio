@@ -8,6 +8,7 @@ import type { CanonChannel, CanonControl, CanonNote, CanonSong } from '../midi-t
 import { PPQ } from '../types';
 import { DialectError, fail, gateOf, lengthParts, NOTE_NAMES, singleToken, timeOf, Warnings, WHOLE } from './common';
 import { evalExpr, ExprError, truthy, type ExprEnv, type SValue } from './sakura-expr';
+import { sakuraConstant, sakuraVoiceNumber } from './sakura-names';
 import type { DialectConvertResult, DialectSong } from './types';
 
 /* ================================================================== characters */
@@ -62,13 +63,15 @@ function stripComments(src: SChar[]): SChar[] {
       continue;
     }
     // {"..."} string literal
+    // {"..."} string literal: only when a closing `"` is followed by `}` (`Div{"e"g"a}` uses `"` as octave marks)
     if (c === '"' && lastNonSpace(out)?.ch === '{') {
-      const end = src.findIndex((x, k) => k > i && x.ch === '"');
-      if (end < 0) fail('E_SAKURA_STRING', '文字列 {"…"} の閉じる " がありません。', src[i]);
-      for (let k = i; k <= end; k++) out.push({ ...src[k], str: true });
-      i = end;
-      lineStart = false;
-      continue;
+      const end = stringEnd(src, i);
+      if (end >= 0) {
+        for (let k = i; k <= end; k++) out.push({ ...src[k], str: true });
+        i = end;
+        lineStart = false;
+        continue;
+      }
     }
     // TrackName={...} / Copyright={...}: the text inside is a string (may contain any character)
     if (c === '{' && META_BRACE.test(tailText(out))) {
@@ -114,6 +117,20 @@ function tailText(a: SChar[]): string {
   let s = '';
   for (let i = a.length - 1; i >= 0 && s.length < 24; i--) s = a[i].ch + s;
   return s;
+}
+
+/** index of the `"` closing a {"..."} string that starts at `open`, or -1 */
+function stringEnd(src: SChar[], open: number): number {
+  for (let k = open + 1; k < src.length; k++) {
+    const ch = src[k].ch;
+    if (ch === '}') return -1;
+    if (ch === '"') {
+      let n = k + 1;
+      while (n < src.length && /\s/.test(src[n].ch)) n++;
+      if (src[n]?.ch === '}') return k;
+    }
+  }
+  return -1;
 }
 
 function lastNonSpace(a: SChar[]): SChar | undefined {
@@ -244,6 +261,8 @@ const RHYTHM_WORDS = ['Rhythm', 'RHYTHM', 'Rythm', 'RYTHM'];
 
 function replaceJapanese(src: SChar[], warn: Warnings): SChar[] {
   const out: SChar[] = [];
+  /** `~{name}={value}`: user-defined sutoton words (they win over the built-in table) */
+  const user: Array<[string, string]> = [];
   let rhythmPending = false;
   let rhythmDepth = 0;
   let japanese = false;
@@ -260,6 +279,30 @@ function replaceJapanese(src: SChar[], warn: Warnings): SChar[] {
         rhythmPending = false;
       } else if (rhythmDepth > 0) rhythmDepth++;
     } else if (c.ch === '}' && rhythmDepth > 0) rhythmDepth--;
+    if (c.ch === '~' && src[i + 1]?.ch === '{' && !src[i + 1].str) {
+      const close = src.findIndex((x, k) => k > i + 1 && x.ch === '}');
+      let k = close + 1;
+      while (k < src.length && /\s/.test(src[k].ch)) k++;
+      if (close > 0 && src[k]?.ch === '=') {
+        k++;
+        while (k < src.length && /\s/.test(src[k].ch)) k++;
+        if (src[k]?.ch === '{') {
+          const { body, end } = readBraces(src, k);
+          const name = src.slice(i + 2, close).map((x) => x.ch).join('').trim();
+          const value = body.map((x) => x.ch).join('');
+          if (name) user.push([name, value]);
+          user.sort((a, b) => b[0].length - a[0].length);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    const mine = user.find(([w]) => [...w].every((ch, k) => src[i + k]?.ch === ch && !src[i + k]?.str));
+    if (mine) {
+      out.push(...charsOf(mine[1], c));
+      i += [...mine[0]].length;
+      continue;
+    }
     if (c.ch.charCodeAt(0) < 0x80) {
       out.push(c);
       i++;
@@ -290,6 +333,14 @@ function replaceJapanese(src: SChar[], warn: Warnings): SChar[] {
     if (!hit) fail('E_SAKURA_CHAR', `変換できない文字です: ${c.ch}`, c);
     japanese = true;
     out.push(...charsOf(hit[1], c));
+    if (hit[1].endsWith('=')) {
+      let k = i + hit[0].length;
+      while (/[ \t]/.test(src[k]?.ch ?? '')) k++;
+      if (src[k]?.ch === '=' && !src[k].str) {
+        i = k + 1;
+        continue;
+      }
+    }
     if (hit[1] === 'Rythm') rhythmPending = true;
     i += hit[0].length;
   }
@@ -301,10 +352,10 @@ function replaceJapanese(src: SChar[], warn: Warnings): SChar[] {
 
 const UNSUPPORTED = new Set(
   [
-    'Result', 'Play', 'PLAY', 'Print', 'PRINT', 'Replace', 'REPLACE',
+    'Result', 'Print', 'PRINT', 'Replace', 'REPLACE',
     'Mid', 'MID', 'Random', 'RANDOM', 'RandomInt', 'RND', 'Rnd', 'RandomSelect', 'RandomSeed', 'RANDOM_SEED', 'System.RandomSeed',
     'Include', 'INCLUDE', 'System.Include', 'DirectSMF', 'NoteOn', 'NoteOff', 'RPN', 'NRPN', 'ArrayFlatten', 'SizeOf',
-    'StrLen', 'Chr', 'Asc', 'Hex', 'Pos', 'NoteNo', 'OctaveUnison', 'Unison', 'Unison5th', 'Unison3th', 'RndTiming',
+    'StrLen', 'Chr', 'Asc', 'Hex', 'Pos', 'NoteNo', 'RndTiming',
   ],
 );
 
@@ -318,6 +369,8 @@ interface Defs {
   /** rhythm macros ($x{...}) */
   rhythm: Map<string, string>;
   meta: Array<{ kind: string; text: string }>;
+  bestEffort?: boolean;
+  approximate?: boolean;
 }
 
 function readBraces(src: SChar[], open: number): { body: SChar[]; end: number } {
@@ -367,14 +420,26 @@ function expand(src: SChar[], defs: Defs, depth: number, warn: Warnings): SChar[
       const eq = skipSpace(src, k);
       if (src[eq]?.ch === '=') {
         const open = skipSpace(src, eq + 1);
-        if (src[open]?.ch !== '{') fail('E_SAKURA_MACRO', `マクロ #${name} の定義は #${name}={…} の形で書いてください。`, c);
+        if (src[open]?.ch !== '{') {
+          if (!defs.bestEffort) fail('E_SAKURA_MACRO', `マクロ #${name} の定義は #${name}={…} の形で書いてください。`, c);
+          defs.approximate = true;
+          warn.add('W_SAKURA_APPROX', `#${name} の後の = を、マクロの定義として読めませんでした（近似変換: スキップしました）`, c);
+          i = k - 1;
+          continue;
+        }
         const { body, end } = readBraces(src, open);
         defs.macros.set(name, body);
         i = end;
         continue;
       }
       const body = defs.macros.get(name);
-      if (!body) fail('E_SAKURA_MACRO', `未定義のマクロ #${name} です。`, c);
+      if (!body) {
+        if (!defs.bestEffort) fail('E_SAKURA_MACRO', `未定義のマクロ #${name} です。`, c);
+        defs.approximate = true;
+        warn.add('W_SAKURA_APPROX', `未定義のマクロ #${name} を読み飛ばしました（近似変換: スキップしました）`, c);
+        i = k - 1;
+        continue;
+      }
       const args: SChar[][] = [];
       let next = k;
       if (body.some((x) => x.ch === '?') && src[skipSpace(src, k)]?.ch === '{') {
@@ -431,7 +496,19 @@ function expandRhythm(src: SChar[], defs: Defs): SChar[] {
       const open = skipSpace(src, k);
       if ((RHYTHM_WORDS.includes(word) || word === 'R') && src[open]?.ch === '{') {
         const { body, end } = readBraces(src, open);
-        for (const b of body) {
+        for (let bi = 0; bi < body.length; bi++) {
+          const b = body[bi];
+          if (!b.str && b.ch === '(') {
+            // the inside of ( ) is not replaced; `(Sub)` is the command Sub
+            const close = body.findIndex((x, k) => k > bi && x.ch === ')');
+            if (close > 0) {
+              const inner = body.slice(bi + 1, close);
+              if (/^[A-Za-z_]\w*$/.test(inner.map((x) => x.ch).join(''))) out.push(...inner);
+              else out.push(...body.slice(bi, close + 1));
+              bi = close;
+              continue;
+            }
+          }
           const m = !b.str && (defs.rhythm.get(b.ch) ?? RHYTHM_DEFAULT[b.ch]);
           if (m) out.push(...charsOf(m, b));
           else out.push(b);
@@ -472,6 +549,16 @@ function expandLoops(src: SChar[], ints: Map<string, number> = new Map()): SChar
     let k = skipSpace(src, i + 1);
     let count = '';
     while (/[0-9]/.test(src[k]?.ch ?? '')) count += src[k++].ch;
+    if (count === '' && src[k]?.ch === '(') {
+      // [(4) ...]
+      let e = k + 1;
+      let n = '';
+      while (/[0-9]/.test(src[e]?.ch ?? '')) n += src[e++].ch;
+      if (n && src[e]?.ch === ')') {
+        count = n;
+        k = e + 1;
+      }
+    }
     if (count === '' && isUpperStart(src[k]?.ch)) {
       let e = k;
       let name = '';
@@ -603,6 +690,14 @@ function splitTop(chars: SChar[], sep: string): SChar[][] {
   out.push(cur);
   return out;
 }
+/** `"c4.cc2"` (a quoted string literal used as a Str value) -> its text as MML */
+function unquote(chars: SChar[]): SChar[] {
+  const t = trimChars(chars);
+  if (t.length >= 2 && t[0].ch === '"' && t[t.length - 1].ch === '"' && (t[0].str || !t.slice(1, -1).some((c) => c.ch === '"'))) {
+    return t.slice(1, -1).map((c) => ({ ...c, str: false }));
+  }
+  return chars;
+}
 const isBraced = (chars: SChar[]) => chars.length >= 2 && chars[0].ch === '{' && !chars[0].str && chars[chars.length - 1].ch === '}';
 
 const SEMI: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
@@ -628,6 +723,8 @@ function normalizeName(s: string): string {
 }
 
 function voiceByName(name: string, at: Pos): number {
+  const sakura = sakuraVoiceNumber(name.trim());
+  if (sakura !== undefined) return sakura - 1;
   const n = normalizeName(name);
   if (n) {
     const exact = GM_INSTRUMENTS.findIndex((g) => normalizeName(g) === n);
@@ -645,6 +742,8 @@ class Interpreter {
   private readonly scopes: Array<Map<string, Var>> = [new Map()];
   private readonly funcs = new Map<string, FuncDef>();
   private callDepth = 0;
+  /** For / While nesting in the current function (Break / Continue targets) */
+  private loopDepth = 0;
   private steps = 0;
   private includeSeen = false;
   /** a warning or skip changed the result (best-effort mode) */
@@ -773,7 +872,11 @@ class Interpreter {
         ticks = this.stepTicks(this.need(this.intArg(), '%', at), at);
       } else if (/[0-9]/.test(this.peek())) {
         const n = this.int() as number;
-        if (n < 1) fail('E_SAKURA_RANGE', `音長 ${n} は使えません。`, at);
+        if (n === 0) {
+          // `c0e0g` (Sakura v1/v2): the note sounds together with the next one
+          total = (total ?? 0) + 0;
+          break;
+        }
         const exact = WHOLE / n;
         ticks = Math.round(exact);
         if (ticks !== exact) this.warn.add('W_SAKURA_ROUND', `音長 ${n} を ${ticks} tick に丸めました。`, at);
@@ -790,30 +893,44 @@ class Interpreter {
       } else break;
       total = (total ?? 0) + ticks;
       // `8+2`: length addition (only when a digit follows)
-      if (this.peek() === '+' && /[0-9%]/.test(this.peek(1))) {
-        this.p++;
+      let q = this.p;
+      while (/\s/.test(this.src[q]?.ch ?? '') && !this.src[q].str) q++;
+      if (this.src[q]?.ch === '+' && /[0-9%]/.test(this.src[q + 1]?.ch ?? '')) {
+        this.p = q + 1;
         this.warn.add('W_SAKURA_PLUS', '音長の + は足し算として変換しました（推定）。', at);
         continue;
+      }
+      // `2.-64`: length subtraction (a flat is written before the length, so this is not a flat)
+      if (this.peek() === '-' && /[0-9%]/.test(this.peek(1))) {
+        this.p++;
+        const sub = this.length(at);
+        if (sub !== null) total = Math.max(0, total - sub);
+        this.warn.add('W_SAKURA_MINUS', '音長の - は引き算として変換しました（推定）。', at);
       }
       break;
     }
     return total;
   }
 
-  private pitchOf(letter: string, octave: number, at: Pos): number {
+  private pitchOf(letter: string, octave: number): number {
     let acc = 0;
     let explicit = false;
     while (this.peek() === '+' || this.peek() === '#' || this.peek() === '-') {
-      // `+` followed by a digit is a length addition, not a sharp
-      if (this.peek() === '+' && /[0-9]/.test(this.peek(1))) break;
       acc += this.src[this.p++].ch === '-' ? -1 : 1;
       explicit = true;
     }
     if (!explicit) acc += this.keyFlag.get(letter) ?? 0;
     const pitch = 12 * (octave + this.oneShot) + SEMI[letter] + acc + this.key + this.cur.trackKey;
     this.oneShot = 0;
-    if (pitch < 0 || pitch > 127) fail('E_SAKURA_RANGE', `音高が MIDI の範囲を超えています（${pitch}）。`, at);
     return pitch;
+  }
+
+  /** strict: error; best-effort: the note is skipped (true) */
+  private outOfRange(pitch: number, at: Pos): boolean {
+    if (pitch >= 0 && pitch <= 127) return false;
+    if (!this.bestEffort) fail('E_SAKURA_RANGE', `音高が MIDI の範囲を超えています（${pitch}）。`, at);
+    this.skipped(`音高が MIDI の範囲を超えています（${pitch}）。オクターブの指定を確認してください。この音は休符にしました`, at, '（近似変換）');
+    return true;
   }
 
   /** `,q,v,t,o` parameters after a note / chord. */
@@ -833,7 +950,7 @@ class Interpreter {
           res.gate = { mode: 'ticks', value: this.stepTicks(this.need(this.int(), 'q%', at), at) };
         } else {
           const q = this.int();
-          if (q !== null) res.gate = { mode: 'percent', value: Math.min(100, q) };
+          if (q !== null) res.gate = { mode: 'percent', value: Math.min(q, 10000) };
         }
       } else if (what === 'v') {
         const v = this.int();
@@ -870,6 +987,11 @@ class Interpreter {
 
   private emitNote(pitches: number[], duration: number, at: Pos, extra: { gate?: GateSpec; velocity?: number }, tie: boolean): void {
     const t = this.cur;
+    if (this.pendingChord.length) {
+      pitches = [...new Set([...this.pendingChord, ...pitches])].sort((a, b) => a - b);
+      this.pendingChord = [];
+      tie = false;
+    }
     if (tie) {
       // `&`: same pitch(es) extend the previous note; otherwise legato
       const prev = this.lastNote();
@@ -1067,6 +1189,21 @@ class Interpreter {
   }
 
   private readonly env: ExprEnv = {
+    noteLength: (text) => {
+      let ticks = 0;
+      for (const part of text.split('^')) {
+        const m = /^(\d+)(\.*)$/.exec(part);
+        if (!m || Number(m[1]) === 0) return undefined;
+        let t = WHOLE / Number(m[1]);
+        let add = t / 2;
+        for (let d = 0; d < m[2].length; d++) {
+          t += add;
+          add /= 2;
+        }
+        ticks += t;
+      }
+      return Math.round((ticks * this.timeBase) / PPQ);
+    },
     lookup: (name) => {
       const v = this.lookupVar(name);
       if (v) return v.t === 'int' ? v.v : textOf(v.chars);
@@ -1081,6 +1218,20 @@ class Interpreter {
           return this.cur.id;
         case 'DeviceNumber':
           return 0x10;
+        case 'v':
+          return this.cur.velocity;
+        case 'o':
+          return this.cur.octave;
+        case 'KEY':
+        case 'Key':
+        case 'KEY_SHIFT':
+          return this.key;
+        case 'TR_KEY':
+        case 'TrackKey':
+          return this.cur.trackKey;
+        case 'TIMEBASE':
+        case 'Timebase':
+          return this.timeBase;
         case 'TRUE':
         case 'True':
         case 'true':
@@ -1090,7 +1241,7 @@ class Interpreter {
         case 'false':
           return 0;
       }
-      return undefined;
+      return sakuraConstant(name);
     },
     call: (name, args) => {
       if (name === 'MML' && args.length === 1) {
@@ -1209,6 +1360,11 @@ class Interpreter {
         this.p = k;
         return v.v;
       }
+      const c = v ? undefined : sakuraConstant(name);
+      if (c !== undefined) {
+        this.p = k;
+        return c;
+      }
     }
     this.p = save;
     return null;
@@ -1227,6 +1383,14 @@ class Interpreter {
     switch (c) {
       case 'r': {
         this.p++;
+        this.dropPendingChord(at);
+        if (this.peek() === '-' && /[0-9%]/.test(this.peek(1))) {
+          // `r-4`: move the time pointer back
+          this.p++;
+          const back = this.ties(this.length(at) ?? this.cur.length, at);
+          this.cur.cursor = Math.max(0, this.cur.cursor - back);
+          return;
+        }
         let d = this.length(at, this.cur.length) ?? this.cur.length;
         d = this.ties(d, at);
         this.push({ kind: 'rest', start: this.cur.cursor, duration: d, line: at.line }, false);
@@ -1235,9 +1399,13 @@ class Interpreter {
       }
       case 'n': {
         this.p++;
-        const no = this.need(this.int(), 'n', at);
-        if (no > 127) fail('E_SAKURA_RANGE', `n${no} は範囲外です（0〜127）。`, at);
+        const no = this.need(this.intArg(), 'n', at);
+        if (no > 127 || no < 0) fail('E_SAKURA_RANGE', `n${no} は範囲外です（0〜127）。`, at);
         const prm = this.params('l', at);
+        if (prm.length === 0) {
+          this.zeroLength([no + this.key + this.cur.trackKey], at);
+          return;
+        }
         let d = prm.length ?? this.cur.length;
         d = this.ties(d, at);
         const pitch = no + this.key + this.cur.trackKey;
@@ -1272,7 +1440,7 @@ class Interpreter {
         this.p++;
         if (this.method()) return;
         const len = this.length(at);
-        if (len === null) fail('E_SAKURA_VALUE', 'l の後に音長が必要です。', at);
+        if (len === null || len === 0) fail('E_SAKURA_VALUE', 'l の後に音長が必要です。', at);
         this.cur.length = len;
         this.push({ kind: 'length', ticks: len, line: at.line }, false);
         return;
@@ -1291,9 +1459,9 @@ class Interpreter {
           this.cur.velocity = Math.max(0, this.cur.velocity - this.vAdd);
           return;
         }
-        const v = this.need(this.intArg(), 'v', at);
-        if (v > 127 || v < 0) fail('E_SAKURA_RANGE', `v${v} は範囲外です（0〜127）。`, at);
-        this.cur.velocity = v;
+        const v = this.need(this.intArg(true), 'v', at);
+        if (v > 127 || v < 0) this.warn.add('W_SAKURA_CLAMP', `範囲外の値（v${v} など）を 0〜127 に収めました。`, at);
+        this.cur.velocity = Math.max(0, Math.min(127, v));
         return;
       }
       case ')':
@@ -1314,14 +1482,14 @@ class Interpreter {
           return;
         }
         const q = this.need(this.intArg(), 'q', at);
-        if (q > 100) this.warn.add('W_SAKURA_GATE', `q${q} は 100 として変換しました。`, at);
-        this.cur.gate = { mode: 'percent', value: Math.min(100, q) };
+        if (q > 100) this.warn.add('W_SAKURA_GATE', `q${q}（100 を超えるゲート）は、音ごとに音長の ${q}% を q%N（tick 指定）で書きました。`, at);
+        this.cur.gate = { mode: 'percent', value: Math.min(q, 10000) };
         return;
       }
       case 't': {
         this.p++;
         if (this.method()) return;
-        this.int(true);
+        this.intArg(true);
         this.warn.add('W_SAKURA_TIMING', 't（発音タイミングのずらし）は変換しません。', at);
         return;
       }
@@ -1331,6 +1499,7 @@ class Interpreter {
         this.blanks();
         if (this.peek() === '%') {
           this.p++;
+          if (this.method()) return;
           const v = this.need(this.intArg(true), 'p%', at);
           this.bend(v, at);
           return;
@@ -1372,7 +1541,7 @@ class Interpreter {
           }
           const name = textOf(inner);
           this.program(voiceByName(name, at) + 1, null, null, at);
-          this.warn.add('W_SAKURA_VOICE_NAME', `音色名「${name.trim()}」を GM 音色名と照合しました（推定）。`, at);
+          if (sakuraVoiceNumber(name.trim()) === undefined) this.warn.add('W_SAKURA_VOICE_NAME', `音色名「${name.trim()}」を GM 音色名と照合しました（推定）。`, at);
           return;
         }
         const n = this.need(this.intArg(), '@', at);
@@ -1446,17 +1615,40 @@ class Interpreter {
   }
 
   private note(letter: string, at: Pos): void {
-    const pitch = this.pitchOf(letter, this.cur.octave, at);
+    const pitch = this.pitchOf(letter, this.cur.octave);
     let d = this.length(at, this.cur.length) ?? this.cur.length;
+    if (d === 0) {
+      if (!this.outOfRange(pitch, at)) this.zeroLength([pitch], at);
+      return;
+    }
     d = this.ties(d, at);
     const prm = this.params('q', at);
     d = this.ties(d, at);
     const tie = this.consumeTie();
+    if (this.outOfRange(pitch, at)) {
+      this.push({ kind: 'rest', start: this.cur.cursor, duration: d, line: at.line }, false);
+      this.cur.cursor += d;
+      return;
+    }
     this.emitNote([pitch], d, at, prm, tie);
+  }
+
+  /** `c0e0g`: pitches waiting for the next note, which gives the chord its length */
+  private pendingChord: number[] = [];
+  private zeroLength(pitches: number[], at: Pos): void {
+    this.params('q', at);
+    for (const p of pitches) if (!this.pendingChord.includes(p)) this.pendingChord.push(p);
+    this.warn.add('W_SAKURA_LEN0', '音長 0 の音（c0e0g の書き方）は、次の音と同時に同じ長さで鳴らしました（サクラ v1/v2 の和音の書き方・推定）。', at);
+  }
+  private dropPendingChord(at: Pos): void {
+    if (this.pendingChord.length === 0) return;
+    this.pendingChord = [];
+    this.warn.add('W_SAKURA_LEN0_DROP', '音長 0 の音の後に音符が無いため、その音は鳴らしませんでした。', at);
   }
 
   private chord(at: Pos): void {
     const pitches: number[] = [];
+    let innerLen: number | null = null;
     let octave = this.cur.octave;
     for (;;) {
       this.spaces();
@@ -1466,12 +1658,22 @@ class Interpreter {
       this.p++;
       if (c === "'") break;
       if (c in SEMI) {
-        const pitch = this.pitchOf(c, octave, here);
-        if (!pitches.includes(pitch)) pitches.push(pitch);
+        const pitch = this.pitchOf(c, octave);
+        if (this.outOfRange(pitch, here)) {
+          /* skipped */
+        } else if (!pitches.includes(pitch)) pitches.push(pitch);
         else this.warn.add('W_SAKURA_CHORD_DUP', '和音の中の同じ音高を 1 つにまとめました。', here);
-        if (/[0-9]/.test(this.peek())) {
-          this.int();
-          this.warn.add('W_SAKURA_CHORD_LEN', '和音の中の個別の音長は無視しました。', here);
+        if (/[0-9%.]/.test(this.peek())) {
+          let len = this.length(here, this.cur.length);
+          if (len !== null) len = this.ties(len, here);
+          if (len !== null && len > 0) {
+            if (innerLen !== null && innerLen !== len) this.warn.add('W_SAKURA_CHORD_LEN', '和音の中で音ごとに違う音長は、最初の音の音長にそろえました。', here);
+            innerLen ??= len;
+          }
+        }
+        if (this.peek() === ',') {
+          this.params('q', here);
+          this.warn.add('W_SAKURA_CHORD_PARAM', '和音の中の音ごとのゲート・ベロシティ（c,,50 など）は無視しました。', here);
         }
       } else if (c === 'o') {
         const o = this.need(this.int(), 'o', here);
@@ -1482,8 +1684,13 @@ class Interpreter {
       else if (c === '`') this.oneShot++;
       else if (c === '"') this.oneShot--;
       else if (c === 'n') {
-        const no = this.need(this.int(), 'n', here);
+        const no = this.need(this.intArg(), 'n', here);
         pitches.push(no + this.key + this.cur.trackKey);
+        // `'n38 n51,,,30'`, drum hiragana `「ぱず」` -> `'n49,n36,'`: per-note parameters are not kept
+        if (this.peek() === ',') {
+          const prm = this.params('l', here);
+          if (prm.gate || prm.velocity !== undefined) this.warn.add('W_SAKURA_CHORD_PARAM', '和音の中の音ごとのゲート・ベロシティ（c,,50 など）は無視しました。', here);
+        }
       } else if (isUpperStart(c)) {
         // a Str inside a chord (`'OA'`): splice its text in place
         let k = this.p - 1;
@@ -1497,7 +1704,11 @@ class Interpreter {
       } else fail('E_SAKURA_SYNTAX', `和音の中に書けない文字です: ${c}`, here);
     }
     if (pitches.length === 0) fail('E_SAKURA_SYNTAX', '和音に音がありません。', at);
-    let d = this.length(at, this.cur.length) ?? this.cur.length;
+    let d = this.length(at, this.cur.length) ?? innerLen ?? this.cur.length;
+    if (d === 0) {
+      this.zeroLength(pitches, at);
+      return;
+    }
     d = this.ties(d, at);
     const prm = this.params('q', at);
     const tie = this.consumeTie();
@@ -1564,7 +1775,11 @@ class Interpreter {
   }
 
   private cc(n: number, v: number, at: Pos): void {
-    if (n > 127 || v > 127 || n < 0 || v < 0) fail('E_SAKURA_RANGE', `CC(${n},${v}) は範囲外です（0〜127）。`, at);
+    if (n > 127 || n < 0) fail('E_SAKURA_RANGE', `CC(${n},${v}) は範囲外です（0〜127）。`, at);
+    if (v > 127 || v < 0) {
+      this.warn.add('W_SAKURA_CLAMP', `範囲外の値（CC(${n},${v}) など）を 0〜127 に収めました。`, at);
+      v = Math.max(0, Math.min(127, v));
+    }
     this.control({ kind: 'cc', channel: this.cur.vtrack.channel - 1, tick: 0, controller: n, value: v }, `CC(${n},${v})`, at);
   }
 
@@ -1767,6 +1982,16 @@ class Interpreter {
       case 'SysEx$':
         this.sysex(at);
         return;
+      case 'OctaveUnison':
+      case 'Unison5th':
+      case 'Unison3th':
+      case 'Unison':
+        this.unison(name, at);
+        return;
+      case 'Play':
+      case 'PLAY':
+        this.play(at);
+        return;
     }
     if (META.has(name)) {
       const v = a()?.[0] ?? '';
@@ -1800,6 +2025,58 @@ class Interpreter {
       return;
     }
     this.unknownName(name, at);
+  }
+
+  /**
+   * Predefined macros: OctaveUnison{X} = Sub{> X <} X, Unison5th{X} = Sub{Key=7 X Key=0} X,
+   * Unison3th{X} (Key=4), Unison{X},n (Key=n). Arguments in { } or ( ).
+   */
+  private unison(name: string, at: Pos): void {
+    this.blanks();
+    let args: SChar[][];
+    if (this.peek() === '{') {
+      args = [this.braceChars()];
+      while (this.peek() === ',') {
+        this.p++;
+        args.push(this.peek() === '{' ? this.braceChars() : trimChars(this.readExprChars()));
+      }
+    } else if (this.peek() === '(') args = splitTop(this.parenChars(), ',').map(trimChars);
+    else fail('E_SAKURA_SYNTAX', `${name} の後に {…} が必要です。`, at);
+    const body = isBraced(args[0]) ? args[0].slice(1, -1) : args[0];
+    const shift = name === 'Unison5th' ? 7 : name === 'Unison3th' ? 4 : name === 'Unison' ? Math.trunc(this.evalNum(textOf(args[1] ?? []), name, at)) : 0;
+    const t = this.cur;
+    const start = t.cursor;
+    const saveKey = this.key;
+    try {
+      if (name === 'OctaveUnison') t.octave++;
+      else this.key += shift;
+      this.exec(body);
+    } finally {
+      if (name === 'OctaveUnison') t.octave--;
+      this.key = saveKey;
+      t.cursor = start;
+    }
+    this.exec(body);
+  }
+
+  /** Play(A,B,...): the n-th Str is played on track n from the current time; afterwards the tracks are in sync. */
+  private play(at: Pos): void {
+    this.blanks();
+    if (this.peek() !== '(') fail('E_SAKURA_SYNTAX', 'Play の後に (…) が必要です。', at);
+    const args = splitTop(this.parenChars(), ',').map(trimChars);
+    const start = this.cur.cursor;
+    const back = this.cur;
+    args.forEach((a, i) => {
+      const v = /^[A-Za-z_]\w*$/.test(textOf(a)) ? this.lookupVar(textOf(a)) : undefined;
+      const body = v?.t === 'str' ? v.chars : isBraced(a) ? unquote(a.slice(1, -1)) : null;
+      if (!body) fail('E_SAKURA_UNSUPPORTED', `Play の引数「${textOf(a)}」は Str の名前か {…} で書いてください。${MIDI_HINT}`, at);
+      this.cur = this.track(i + 1);
+      this.cur.cursor = start;
+      this.exec(body);
+    });
+    const max = Math.max(...[...this.tracks.values()].map((t) => t.cursor));
+    for (const t of this.tracks.values()) t.cursor = max;
+    if (args.length === 0) this.cur = back;
   }
 
   /** A name that is neither a command nor defined in the pasted text. */
@@ -1862,14 +2139,16 @@ class Interpreter {
         throw new ReturnSignal();
       case 'Break':
       case 'BREAK':
-        throw new BreakSignal();
-      case 'Continue':
-      case 'CONTINUE':
-        throw new ContinueSignal();
       case 'Exit':
       case 'EXIT':
-        this.ended = true;
+      case 'Continue':
+      case 'CONTINUE': {
+        // Exit is the same as Break (leaves the loop). Outside a loop: return from the function, or ignore.
+        if (this.loopDepth > 0) throw /^C/i.test(name) ? new ContinueSignal() : new BreakSignal();
+        if (this.callDepth > 0) throw new ReturnSignal();
+        this.warn.add('W_SAKURA_BREAK', `ループの外の ${name} は無視しました。`, at);
         return true;
+      }
       case 'Else':
       case 'ELSE':
         fail('E_SAKURA_SYNTAX', 'If の無い Else です。', at);
@@ -1962,8 +2241,14 @@ class Interpreter {
   private strValue(at: Pos): SChar[] {
     this.blanks();
     let chars: SChar[] | null = null;
-    if (this.peek() === '{') chars = this.braceChars();
-    else if (isUpperStart(this.peek())) {
+    if (this.peek() === '{') chars = unquote(this.braceChars());
+    else if (this.peek() === '"') {
+      const close = this.src.findIndex((x, k) => k > this.p && x.ch === '"');
+      if (close > 0) {
+        chars = this.src.slice(this.p + 1, close).map((c) => ({ ...c, str: false }));
+        this.p = close + 1;
+      }
+    } else if (isUpperStart(this.peek())) {
       const save = this.p;
       const v = this.lookupVar(this.ident());
       if (v?.t === 'str') chars = v.chars;
@@ -2030,6 +2315,8 @@ class Interpreter {
     });
     if (++this.callDepth > MAX_CALL_DEPTH) fail('E_SAKURA_LIMIT', `関数の呼び出しが ${MAX_CALL_DEPTH} 段を超えました（再帰している可能性があります）。`, at);
     this.scopes.push(scope);
+    const loops = this.loopDepth;
+    this.loopDepth = 0;
     try {
       this.exec(f.body);
     } catch (e) {
@@ -2037,11 +2324,12 @@ class Interpreter {
     } finally {
       this.scopes.pop();
       this.callDepth--;
+      this.loopDepth = loops;
     }
   }
 
   private argValue(a: SChar[], type: Param['type'], what: string, at: Pos): Var {
-    if (isBraced(a)) return { t: 'str', chars: a.slice(1, -1) };
+    if (isBraced(a)) return { t: 'str', chars: unquote(a.slice(1, -1)) };
     const text = textOf(a).trim();
     if (/^[A-Za-z_]\w*$/.test(text)) {
       const v = this.lookupVar(text);
@@ -2131,11 +2419,14 @@ class Interpreter {
         const ok = this.condition(cond, at);
         if (ok === null || !ok) return;
       }
+      this.loopDepth++;
       try {
         this.exec(body);
       } catch (e) {
         if (e instanceof BreakSignal) return;
         if (!(e instanceof ContinueSignal)) throw e;
+      } finally {
+        this.loopDepth--;
       }
       if (textOf(step).trim()) this.simpleStatement(textOf(step), at);
     }
@@ -2349,9 +2640,11 @@ function writeSong(song: Song, warn: Warnings, approximate: boolean): Built {
               t += `v${it.velocity} `;
               velocity = it.velocity;
             }
-            if (it.gate.mode !== gate.mode || it.gate.value !== gate.value) {
-              t += it.gate.mode === 'percent' ? `q${it.gate.value} ` : `q%${it.gate.value} `;
-              gate = it.gate;
+            // q over 100 % cannot be written as qN: use the tick form q%N for this note
+            const ng: GateSpec = it.gate.mode === 'percent' && it.gate.value > 100 ? { mode: 'ticks', value: gateOf(it.duration, it.gate.value) } : it.gate;
+            if (ng.mode !== gate.mode || ng.value !== gate.value) {
+              t += ng.mode === 'percent' ? `q${ng.value} ` : `q%${ng.value} `;
+              gate = ng;
             }
             const len =
               it.duration === defLen
@@ -2443,8 +2736,8 @@ function writeSong(song: Song, warn: Warnings, approximate: boolean): Built {
 
 /* ================================================================== public API */
 
-function preprocess(text: string, warn: Warnings): { chars: SChar[]; defs: Defs } {
-  const defs: Defs = { macros: new Map(), strs: new Map(), ints: new Map(), rhythm: new Map(), meta: [] };
+function preprocess(text: string, warn: Warnings, bestEffort = false): { chars: SChar[]; defs: Defs } {
+  const defs: Defs = { macros: new Map(), strs: new Map(), ints: new Map(), rhythm: new Map(), meta: [], bestEffort };
   let chars = toChars(text);
   chars = stripComments(chars);
   chars = normalizeWidth(chars);
@@ -2465,8 +2758,9 @@ export function convertSakura(text: string, options: { bestEffort?: boolean } = 
   try {
     if (text.trim() === '') fail('E_SAKURA_NO_DATA', '変換する MML がありません。', { line: 1, column: 1 });
     const warn = new Warnings();
-    const { chars, defs } = preprocess(text, warn);
+    const { chars, defs } = preprocess(text, warn, options.bestEffort ?? false);
     const interp = new Interpreter(chars, warn, defs.meta, options.bestEffort ?? false);
+    if (defs.approximate) interp.approximate = true;
     interp.run();
     const built = writeSong(interp.song, warn, interp.approximate);
     if (built.notes === 0) fail('E_SAKURA_NO_DATA', '演奏する音符がありません。', { line: 1, column: 1 });
