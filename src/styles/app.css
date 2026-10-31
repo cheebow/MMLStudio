@@ -149,3 +149,9 @@ button, select, input { font: inherit; color: inherit; }
 .import-warnings summary { cursor: pointer; font-size: 13px; }
 .import-warnings ul, .midi-import .msg-warning ul, .midi-import .msg-error ul { margin: 4px 0; padding-left: 18px; }
 .source-badge { color: var(--accent); font-weight: 600; }
+
+/* Phase 6: dialect conversion */
+.dialect-input { width: 100%; min-height: 160px; font-family: var(--mono); font-size: 13px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--editor-bg); color: var(--text); resize: vertical; box-sizing: border-box; margin: 6px 0; }
+.dialect-preview { max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 8px; border-radius: 6px; white-space: pre; margin: 8px 0; }
+.dialect .msg-warning ul, .dialect .msg-error ul { margin: 4px 0; padding-left: 18px; }
+.primary-btn { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }

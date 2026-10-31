@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { compileMml, LIMITS, MIDI_LIMITS, ticksToSeconds, writeSmf, type CompileResult, type CompiledSong, type Diagnostic, type MidiImportOptions } from './engine';
 import { usePlayer } from './hooks/usePlayer';
 import { DEFAULT_SAMPLE, SAMPLES } from './samples';
+import { DialectDialog } from './ui/DialectDialog';
 import { DiagnosticsPanel } from './ui/DiagnosticsPanel';
 import { HelpDialog } from './ui/HelpDialog';
 import { InstrumentDialog } from './ui/InstrumentDialog';
@@ -35,7 +36,7 @@ function initialDocument(): Initial {
   return { source: DEFAULT_SAMPLE.source, fileName: null, restored: false };
 }
 
-type DialogName = 'help' | 'instruments' | 'license' | null;
+type DialogName = 'help' | 'instruments' | 'license' | 'dialect' | null;
 
 async function looksLikeSmf(file: File): Promise<boolean> {
   const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
@@ -237,6 +238,14 @@ export default function App() {
     setNotice('変換前の MML に戻しました。');
   };
 
+  const applyDialect = (mml: string, title: string | undefined) => {
+    if (!confirmDiscard('変換結果')) return;
+    setBackup({ text: editorRef.current?.getValue() ?? source, fileName });
+    replaceDocument(mml, title ? `${title.replace(/[\\/:*?"<>|]/g, '_')}.mml` : null);
+    setDialog(null);
+    setNotice('変換した MML をエディタに反映しました。');
+  };
+
   const changePlaySource = (s: PlaySource) => {
     player.stop();
     setPlaySource(s);
@@ -332,6 +341,9 @@ export default function App() {
               if (f) void openMidiFile(f);
             }}
           />
+          <button type="button" className="tool-btn" onClick={() => setDialog('dialect')}>
+            他の MML から変換
+          </button>
           <button type="button" className="tool-btn" onClick={saveMml}>
             MML保存
           </button>
@@ -419,6 +431,11 @@ export default function App() {
           {importBusy && <span>MIDI を変換中…</span>}
           {playingOriginal && <span className="source-badge">▶ 元 MIDI を再生します（MML の編集は反映されません）</span>}
           {notice && <span className="msg-info">ℹ {notice}</span>}
+          {backup && !midiDoc && (
+            <button type="button" className="link-btn" onClick={restoreBackup}>
+              変換前の MML に戻す
+            </button>
+          )}
           {hasErrors && !playingOriginal && <span className="msg-error">✖ MML にエラーがあります（再生と MIDI 書き出しは無効）</span>}
         </div>
       </footer>
@@ -426,6 +443,7 @@ export default function App() {
       <HelpDialog open={dialog === 'help'} onClose={() => setDialog(null)} />
       <InstrumentDialog open={dialog === 'instruments'} onClose={() => setDialog(null)} />
       <LicenseDialog open={dialog === 'license'} onClose={() => setDialog(null)} />
+      <DialectDialog open={dialog === 'dialect'} onClose={() => setDialog(null)} onApply={applyDialect} />
     </div>
   );
 }

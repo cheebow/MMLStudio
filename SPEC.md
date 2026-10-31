@@ -1,6 +1,6 @@
 # MML Studio — Web MML Player 開発仕様書
 
-- **文書バージョン**: 1.1.0
+- **文書バージョン**: 1.2.0（他方言 MML の変換を追加）
 - **策定日**: 2026-10-31
 - **実装対象**: Web アプリケーション + 独立した TypeScript MML エンジン
 - **実装担当**: Claude Code
@@ -399,6 +399,110 @@ export function compareMidiEvents(original: ParsedMidi, compiled: CompiledSong):
 
 ---
 
+### 4.5 他方言 MML の変換（Phase 6）
+
+##### 4.5.1 目的と原則
+
+- 他の MML 方言で書かれたテキストを貼り付け、**MML Studio の MML テキストへ変換**してエディタに入れる。
+- **MML Studio の言語（3 章）は変更しない**。方言の構文は変換器の中だけで扱い、出力は常に 3 章の構文で書く（CLAUDE.md 6 の「独自方言を増やさない」を守る）。
+- 変換器は `src/engine/dialects/` の**独自 TypeScript** とし、DOM・音声ライブラリに依存しない。他の MML 処理系のコードは使わない。
+- 変換できない命令・推測で変換した命令は**黙って捨てず**、元テキストの行・列付きの警告にする（4.4 の MIDI インポートと同じ方針）。
+- MML/方言テキストはブラウザ内だけで処理し、外部へ送らない。
+- 対象方言は段階的に追加する。**Phase 6a: PC-9801 `PLAY` 文（下記の行番号形式）**、Phase 6b: picosakura（別途追記）。
+
+##### 4.5.2 公開 API（形の例）
+
+```ts
+export type DialectId = 'pc98-play';
+export interface DialectSong { index: number; title?: string; startLine: number; parts: number }
+export interface DialectWarning { code: string; message: string; line: number; column: number; count?: number }
+export type DialectConvertResult =
+  | { ok: true; mml: string; warnings: DialectWarning[]; summary: { dialect: DialectId; parts: number; notes: number; verified: boolean } }
+  | { ok: false; errors: DialectWarning[] };
+export function listDialectSongs(text: string, dialect: DialectId): DialectSong[];
+export function convertDialect(text: string, dialect: DialectId, options?: { songIndex?: number }): DialectConvertResult;
+```
+
+- 変換器は出力 MML を `compileMml` で**再コンパイル**し、エラーが無いこと、および変換器自身が求めた音符列（音高・開始 tick・発音長・ベロシティ・チャンネル）と一致することを確認する（4.4.3 A-5 と同じ考え方）。一致しなければ `ok: false`。
+- 入力の上限は 2 MiB。出力が 3 章・4.1 の上限（2 MiB、100,000 音符、2,000,000 tick）を超える場合は変換を中止して理由を示す。
+
+##### 4.5.3 PC-9801 `PLAY` 文（行番号形式）— 入力の形
+
+対象は次のような行の並び。
+
+```text
+"0101","テスト曲",3,3,6
+01 "MBQ7L8@13T140@V110Z0,3","MBQ7L8@13T140@V110Z0,3","MBL8@46T140@V115"
+02 "O5C..C32DEFGAB","O4C2E2","R1"
+03 "O5C1","O4C1","R1"
+```
+
+| 行の種類 | 判定 | 扱い |
+|---|---|---|
+| 見出し行 | 引用符付きの文字列 2 つ＋数値 3 つ（`"ID","曲名",n,n,n`） | 曲の区切り。**曲名だけ**コメントに残す。数値は使わない |
+| 演奏行 | `行番号` ＋ 引用符付き文字列 1〜6 個をカンマ区切り。`行番号 PLAY "…","…"` の形も受け付ける | i 番目の文字列 = パート i |
+| 空行・その他 | — | 空行は無視。それ以外は行番号付きエラー |
+
+- **パートの連結**: 各パートの文字列を**行番号の順**に連結し、1 本の MML とみなす（BASIC の `PLAY` はパートごとのキューに積まれ、O/L/V/Q/@/T の状態は行をまたいで続く）。行番号が昇順でない場合は警告して出現順に並べる。
+- 1 つの貼り付けに複数の曲（見出し行が複数）があるときは、曲の一覧を返し、UI で選んだ 1 曲を変換する。見出し行が無ければ全体を 1 曲とみなす。
+- 文字列内の**空白は無視**する（`A #` = `A#`、`< A>` = `<A>`）。英字の大文字・小文字は区別しない。
+- BASIC の文字列変数（`A$` の連結など）、`GOTO`・`FOR` などのプログラム構造は対象外とし、エラーにする。
+
+##### 4.5.4 PC-9801 `PLAY` 文 — 命令の変換表
+
+「確度」列: ◎ = 確定、△ = 推定（変換時に情報警告を出す）。
+
+| 命令 | 意味・範囲・初期値 | 確度 | MML Studio への変換 |
+|---|---|---|---|
+| `C D E F G A B` | 音符。`O4`/`L4` が初期値 | ◎ | 音名。**`O4C` = MIDI 60 とみなす**（未確認。実機で O4A = 440Hz の慣例に合わせる） |
+| `+` `#` / `-` | 半音上げ／下げ | ◎ | `+` / `-` |
+| `.`（複数可） | 付点。1 個で 1.5 倍 | ◎（複数は△） | 2 個目以降は直前の加算分の半分を足す（`..` = 1.75 倍）。分母式（付点 1 個・`^` の連結を含む、例: `8.^32`）で表せればそれを使い、表せなければ `%N` |
+| `Lx` | 既定の音長、1〜64、初期値 `L4` | ◎ | 1,2,4,8,16,32,64 は `lx`。それ以外（`L3`, `L6`, `L12` など）は `l%N`（N = 1920/x、割り切れなければ四捨五入して誤差を警告） |
+| 音長 `x`（音符・休符の後） | 1〜64 | ◎ | 上と同じ規則 |
+| `Rx` | 休符 | ◎ | `r` |
+| `Ox` | オクターブ 1〜8、初期値 `O4` | ◎ | `ox` |
+| `>` / `<` | オクターブ +1 / −1 | ◎ | `>` / `<`（向きは同じ） |
+| `Nx` | 音高を番号で指定、0〜96 | ◎（番号の基準は未確認） | **未確認のため**警告付きで変換（`N0` = 休符、`N1` = `O1C` と仮定）。仮定は DECISIONS に記録 |
+| `&` | 前後の音をつなぐ | ◎ | 同じ音高ならタイ `&`。異なる音高は 2 音のまま、前の音を `q100` 相当で隙間なく書き、警告 |
+| `^x` | 直前の音への音長の加算 | △ | 直前の音に音長を足す（MML Studio の `^`）。情報警告 |
+| `{…}x` | 連符: x 分音符を { } 内の音数で等分 | ◎（x 省略時は未確認） | 各音を `%N` で書く。端数は合計が x 分音符ちょうどになるよう先頭から 1 tick ずつ配分。x 省略時は現在の `L`（未確認・警告）。{ } 内の個別音長は無視して警告 |
+| `Tx` | テンポ 32〜255、初期値 `T120` | ◎（4 分音符/分） | `TR(0)` に `Time(...)` 付きの `Tempo(x)`。テンポは楽曲全体共通（3.6）なので、**最初にテンポを書いたパートを基準**にし、他のパートの同じ位置・同じ値は統合、異なる値は無視して警告 |
+| `Vx` | 音量 0〜15、初期値 `V8` | ◎ | `v` = round(x × 127 / 15)。`V0` は無音 |
+| `@Vx` | 音量 0〜127 | ◎ | `v` = x。`V` と `@V` は**後に書いた方**を使う（機種依存の注記あり） |
+| `Qx` | 音の長さの割合 1〜8、初期値 `Q8` | ◎ | `q` = round(x × 100 / 8)（`Q8` = `q100`、`Q7` = `q88`） |
+| `@x` | FM 音色 0〜81、初期値 `@0` | ◎（番号表は△） | 付録 A の対応表で GM 音色 `@1`〜`@128` に置き換える。音色そのものは再現できない（情報警告は曲ごとに 1 回） |
+| `MB` / `MF` | バックグラウンド／フォアグラウンド演奏 | ◎ | 音に影響しないため無視（警告なし） |
+| `Sx` `Mx` | SSG エンベロープ | ◎ | 変換しない（警告・件数） |
+| `Yr,d` | OPN レジスタ書き込み | ◎ | 変換しない（警告・件数） |
+| `Z…`（例: `Z0,3`） | 音に関係しない設定とみなす | △ | 引数ごと読み飛ばして警告 |
+| `@M` `@L` `@R` | 出力の左右 | ◎ | 変換しない（警告）。将来 `CC(10,…)` への変換を検討 |
+| `@Wx` | 状態を維持 | ◎（意味の詳細は未確認） | 長さ x の休符とみなし、警告 |
+| その他の文字 | — | — | 行・列付きエラー |
+
+**チャンネルと音色の割り当て**
+
+- パート i（1〜6）→ `TR(i) CH(i)`。CH10（GM ドラム）は使わない。
+- パート 1〜3 を FM、4〜6 を SSG とみなす。SSG パートは `@81`（Lead 1 square）を初期音色とし、`@x` があれば FM と同じ表で置き換える。
+- 各トラックの冒頭に、元の音色名をコメントで残す（例: `// @46 HARPSIC → @7 Harpsichord`）。
+
+##### 4.5.5 出力 MML の書式
+
+- 先頭に `// PC-9801 PLAY から変換: <曲名>` と、変換時の注意（音色・エンベロープは再現しない等）をコメントで書く。
+- `TR(0)` にテンポ（`Time(...) Tempo(N)`）、`TR(1)`〜にパート。元の行番号を行コメント（`// 02`）として残し、元データと対応付けられるようにする。
+- 可能な限り音名・`o`・`l`・分母式の音長で書き、表せない長さだけ `%N` を使う。
+
+##### 4.5.6 UI
+
+- ヘッダーに「他の MML から変換」を追加。ダイアログで次を行う。
+  1. テキストを貼り付ける（`.txt` ファイルの読み込みも可）
+  2. 方言を選ぶ（自動判定は候補の提示だけにし、ユーザーが確定する）
+  3. 複数曲なら曲を選ぶ
+  4. 変換結果のプレビュー、警告一覧（行・列・件数）、検証結果を確認する
+  5. 「エディタに反映」。編集中なら確認し、反映前の内容を「変換前の MML に戻す」で復元できるようにする
+- 変換はメインスレッドで行ってよい（2 MiB 上限内で十分に速いことを計測で確認する）。遅い場合は 4.4 の Worker を流用する。
+
+---
+
 ## 5. SoundFont および再生エンジン
 
 ### 5.1 アーキテクチャ
@@ -621,6 +725,28 @@ mml-studio/
 
 **追加確認**: 同一ch/pitch重複ノート、未終端ノート、ペダルで音が残る場合、テンポ変更と巻戻しTimeの混在、Unicodeコメント、多トラック大量イベント、Web Workerの終了・再試行、デフォルト `q90` が忠実変換を壊さないことを検証する。
 
+### Phase 6aの必須受け入れテスト（L47〜L61）
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| L47 | 見出し行＋演奏行 2 行・パート 3 | 3 トラック、各パートが行順に連結、曲名がコメントに残る |
+| L48 | `"O4CDE","O3C2"` を 2 行 | パートごとに O/L/V/Q/@ が行をまたいで継続 |
+| L49 | `L8 C..` / `C.` / `C32` | 420 / 360 / 60 tick。`..` は `%420` |
+| L50 | `L6 C` / `L12 C` / `L3 C` | 320 / 160 / 640 tick（`%N`） |
+| L51 | `{CDE}4` / `{CDEFG}4` | 160×3 / 96×5 tick、合計 480 |
+| L52 | `V15` / `V8` / `@V110` / `V8@V100` | velocity 127 / 68 / 110 / 100 |
+| L53 | `Q8` / `Q7` / `Q4` を L4 で | gate 480 / 422 / 240 |
+| L54 | `O4C` / `O4A` / `>C` / `<C` | 60 / 69 / 72 / 48 |
+| L55 | パート 1・2 に同じ `T140`、パート 3 に `T100` | テンポは 140 のみ、警告 1 件 |
+| L56 | `@46`, `@13`, パート 4 | `@7`、`@1`、パート 4 は既定 `@81`、元音色名のコメント |
+| L57 | `Z0,3`, `S1`, `M255`, `Y1,2`, `MB` | 音は変換され、Z/S/M/Y は件数付き警告、MB は警告なし |
+| L58 | `A #`, `< A>`（空白入り）、小文字 | 空白を無視して A#、オクターブ移動が正しい |
+| L59 | 見出し行が 2 つ | 曲一覧 2 件、指定した曲だけ変換 |
+| L60 | 不正な文字、`GOTO` 行、引用符が閉じていない行 | 行・列付きエラー、変換しない |
+| L61 | すべての変換結果 | `compileMml` でエラー無し、変換器の音符列と一致 |
+
+テストデータは自作する。**他者が作成した MML はリポジトリに含めない**（手元での確認にだけ使う）。
+
 ---
 
 ## 9. 実装フェーズと完了条件
@@ -669,6 +795,16 @@ mml-studio/
 - 楽曲編集・音源切替・シーク連打などの競合状態を重点的に改善。
 - 公式配布音源の著作権帰属・ライセンス表記とデプロイ手順を最終検証。
 - `docs/MML_REFERENCE.md` を実装済みの構文だけで記述し、サンプルと同期。
+
+### Phase 6a — PC-9801 `PLAY`（行番号形式）の変換
+
+- 4.5.1〜4.5.6 の実装、L47〜L61 のテスト、変換ダイアログの E2E、実ブラウザでの再生確認。
+- 未確認の項目（`O4C` の基準、`N` の番号、`^`、`Z` の 2 引数形、連符の既定長、音色番号表）を `docs/DECISIONS.md` に仮定として記録し、ヘルプにも「推定で変換している項目」として載せる。
+- 終了条件: L47〜L61 成功、実際の PC-9801 `PLAY` データを手元で変換して再生でき、警告の内容が妥当であること。
+
+### Phase 6b — picosakura（別途追記）
+
+- 対象構文（`TR 1`、和音内の `o`、音長の `+` など）と変換表は別途追記する。
 
 **MVP（Phase 0〜3）とMIDIインポート拡張（Phase 4）のそれぞれで必須の全項目が実ブラウザで動くまでは、該当段階を「完成」と判定しない。**
 
@@ -803,3 +939,55 @@ Time(1:3:0) CC(64,0)
 - GeneralUser GS 公式GitHub: https://github.com/mrbumpy409/GeneralUser-GS
 
 **最終実装指示**: Phase 0〜3でMMLプレイヤーを完成させ、Phase 4でMIDIインポート→MML変換（和音・複雑な重なり・2モード）を実装する。各段階で単体テスト・実ブラウザ確認まで完了してから結果を報告すること。曖昧な方言差を未確認のまま「標準MML完全互換」と称してはいけない。
+
+---
+
+## 付録 A: FM 音色（0〜81）→ GM 音色（MML Studio の `@1`〜`@128`）
+
+名前からの推定。聴感の一致は保証しない。効果音系は近い GM 効果音に置き換える。
+
+| FM | 名前 | GM | | FM | 名前 | GM |
+|---|---|---|---|---|---|---|
+| 0 | Default VOICE | @1 Acoustic Grand Piano | | 41 | VIBRPHN | @12 Vibraphone |
+| 1 | BRASS 2 | @63 Synth Brass 1 | | 42 | XYLOPHN | @14 Xylophone |
+| 2 | STRING 2 | @50 String Ensemble 2 | | 43 | KOTO | @108 Koto |
+| 3 | EPIANO 3 | @5 Electric Piano 1 | | 44 | ZITAR | @105 Sitar |
+| 4 | EBASS 1 | @34 Electric Bass (finger) | | 45 | CLAV | @8 Clavi |
+| 5 | EORGAN 1 | @17 Drawbar Organ | | 46 | HARPSIC | @7 Harpsichord |
+| 6 | PORGAN 1 | @20 Church Organ | | 47 | BELL | @15 Tubular Bells |
+| 7 | FLUTE | @74 Flute | | 48 | HARP | @47 Orchestral Harp |
+| 8 | OBOE | @69 Oboe | | 49 | BELL/BRASS | @62 Brass Section |
+| 9 | CLARINET | @72 Clarinet | | 50 | HARMONICA | @23 Harmonica |
+| 10 | VIBRPHN | @12 Vibraphone | | 51 | STEEL DRUM | @115 Steel Drums |
+| 11 | HARPSIC | @7 Harpsichord | | 52 | TIMPANI | @48 Timpani |
+| 12 | BELL | @15 Tubular Bells | | 53 | TRAIN | @126 Helicopter |
+| 13 | PIANO | @1 Acoustic Grand Piano | | 54 | AMBULAN | @126 Helicopter |
+| 14 | MUSHI | @124 Bird Tweet | | 55 | TWEET | @124 Bird Tweet |
+| 15 | DESCENT | @104 FX 8 (sci-fi) | | 56 | RAIN DROP | @97 FX 1 (rain) |
+| 16 | UFO | @104 FX 8 (sci-fi) | | 57 | HORN | @61 French Horn |
+| 17 | GRANPRI | @126 Helicopter | | 58 | SNARE DRUM | @119 Synth Drum |
+| 18 | LASER 1 | @104 FX 8 (sci-fi) | | 59 | COW BELL | @114 Agogo |
+| 19 | LASER 2 | @104 FX 8 (sci-fi) | | 60 | PERC 1 | @118 Melodic Tom |
+| 20 | SIN WAVE | @80 Ocarina | | 61 | PERC 2 | @118 Melodic Tom |
+| 21 | BRASS 1 | @62 Brass Section | | 62 | PERC 3 | @116 Woodblock |
+| 22 | BRASS 2 | @63 Synth Brass 1 | | 63 | MUSIC BOX | @11 Music Box |
+| 23 | TRUMPET | @57 Trumpet | | 64 | CELLO | @43 Cello |
+| 24 | STRING 1 | @49 String Ensemble 1 | | 65 | LOW BRASS | @58 Trombone |
+| 25 | STRING 2 | @50 String Ensemble 2 | | 66 | WW ENSMBL | @69 Oboe |
+| 26 | EPIANO 1 | @5 Electric Piano 1 | | 67 | AC GUITAR | @25 Acoustic Guitar (nylon) |
+| 27 | EPIANO 2 | @6 Electric Piano 2 | | 68 | FLUTE/HARP | @74 Flute |
+| 28 | EPIANO 3 | @5 Electric Piano 1 | | 69 | FUNK PLUC | @28 Electric Guitar (clean) |
+| 29 | GUITAR | @26 Acoustic Guitar (steel) | | 70 | FUNK BASS | @37 Slap Bass 1 |
+| 30 | EBASS 1 | @34 Electric Bass (finger) | | 71 | SYN LEAD | @82 Lead 2 (sawtooth) |
+| 31 | EBASS 2 | @35 Electric Bass (pick) | | 72 | METAL CLES | @99 FX 3 (crystal) |
+| 32 | EORGAN 1 | @17 Drawbar Organ | | 73 | STAIN | @89 Pad 1 (new age)（名前の意味不明・推定） |
+| 33 | EORGAN 2 | @18 Percussive Organ | | 74 | CUBIN GLASS | @99 FX 3 (crystal) |
+| 34 | PORGAN 1 | @20 Church Organ | | 75 | HUMAN | @53 Choir Aahs |
+| 35 | PORGAN 2 | @20 Church Organ | | 76 | WOOD BASS | @33 Acoustic Bass |
+| 36 | FLUTE | @74 Flute | | 77 | CHIMES | @15 Tubular Bells |
+| 37 | PICCOLO | @73 Piccolo | | 78 | SPACY | @92 Pad 4 (choir) |
+| 38 | OBOE | @69 Oboe | | 79 | OBOE/BCLAR | @69 Oboe |
+| 39 | CLARINET | @72 Clarinet | | 80 | OLD STRING | @49 String Ensemble 1 |
+| 40 | GROCKEN | @10 Glockenspiel | | 81 | STEEL'S CRY | @31 Distortion Guitar（推定） |
+
+注意: この番号と音色名の対応が PC-9801 の N88-BASIC(86) と同じかは**未確認**。違いが分かれば表だけを差し替える（変換器はこの表をデータとして持つ）。

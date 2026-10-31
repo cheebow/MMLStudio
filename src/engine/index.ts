@@ -9,3 +9,4 @@ export { readSmf, decodeUtf8, type ReadSmfOptions } from './smf-reader';
 export { normalizeMidi } from './midi-normalizer';
 export { compareMidiEvents, canonFromCompiled } from './midi-roundtrip';
 export { midiToMml, importMidi, generateMml, timeOf, GRID_TICKS } from './midi-to-mml';
+export * from './dialects';
