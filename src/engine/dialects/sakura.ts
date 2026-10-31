@@ -23,6 +23,11 @@ interface SChar {
 type Pos = { line: number; column: number };
 
 const MIDI_HINT = 'picosakura で MIDI を書き出し、「MIDIを開く」で取り込むと変換できます。';
+/** For texts that use Include: picosakura cannot read included files either, so exporting MIDI does not help. */
+const INCLUDE_HINT =
+  'この曲は Include で別のファイルを読み込んでいます。picosakura も Include に対応していないため、MIDI を書き出してもそのファイルで定義された命令は再現されません。' +
+  '「変換できない命令はスキップする（近似変換）」をオンにすると、その部分を飛ばして変換できます。';
+const USES_INCLUDE = /(?:\b(?:System\.)?(?:Include|INCLUDE)|読む)\s*[(=]/;
 const MAX_EXPANDED = 4_000_000;
 const MAX_MACRO_DEPTH = 16;
 
@@ -2471,7 +2476,10 @@ export function convertSakura(text: string, options: { bestEffort?: boolean } = 
     }
     return { ok: true, mml: built.mml, warnings: warn.list(), summary: { dialect: 'sakura', parts: built.tracks, notes: built.notes, verified: true, approximate: interp.approximate } };
   } catch (e) {
-    if (e instanceof DialectError) return { ok: false, errors: [e.issue] };
+    if (e instanceof DialectError) {
+      const issue = USES_INCLUDE.test(text) && e.issue.message.includes(MIDI_HINT) ? { ...e.issue, message: e.issue.message.replace(MIDI_HINT, INCLUDE_HINT) } : e.issue;
+      return { ok: false, errors: [issue] };
+    }
     throw e;
   }
 }

@@ -82,7 +82,7 @@ test('picosakura programs show the MIDI export hint; best-effort mode skips what
   await dialog.getByLabel('変換する MML').fill('TR 1\nInclude(delay.h) For(Int I = 0; I < 4; I++){ c }\nMidiDelay({d},8,!2)');
   await dialog.getByRole('button', { name: '変換', exact: true }).click();
   await expect(dialog.getByTestId('dialect-errors')).toContainText('2行1列');
-  await expect(dialog.getByTestId('dialect-errors')).toContainText('MIDIを開く');
+  await expect(dialog.getByTestId('dialect-errors')).toContainText('picosakura も Include に対応していない');
   await expect(dialog.getByTestId('dialect-errors')).toContainText('近似変換');
 
   // best-effort: Include and the unknown MidiDelay are skipped with warnings; For is interpreted

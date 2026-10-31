@@ -508,6 +508,7 @@ export function convertDialect(text: string, dialect: DialectId, options?: { son
   - `Array`、文字列の連結、値が決まらない式・条件（未定義の名前など）
   - `Play()` / `Print()` / `Replace()` / `Mid()` などの文字列操作、`Random()` / `RandomSelect()` / `.Random` / `RandomSeed`
   - `Include` / `読む`（読み込むファイルの内容が分からない）と、その中で定義される命令（未定義の名前）
+- `Include` / `読む` を使っている曲では、MIDI 書き出しの案内の代わりに「picosakura も `Include` に対応していないため MIDI を書き出しても再現されない。近似変換で、その部分を飛ばして変換できる」と案内する（picosakura のエンジン sakuramml-rust では `Include` が未実装）。
   - `SysEx`（GS の Use for Rhythm Part を除く）/ `DirectSMF` / `NoteOn` / `NoteOff`、GS・XG の個別設定命令
 - 1 回の貼り付けを 1 曲として扱う。入力の上限は 2 MiB（4.5.2 と同じ）。
 

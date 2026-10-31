@@ -161,10 +161,20 @@ describe('picosakura acceptance L62–L79', () => {
     ]) {
       const e = err(t);
       expect(e?.code, t).toBe(code);
-      expect(e?.message).toContain('MIDI');
+      expect(e?.message).toMatch(/MIDI|Include/);
       expect(e?.line).toBe(1);
     }
     expect(err('c\n  Print(X)')).toMatchObject({ line: 2, column: 3 });
+  });
+
+  it('L78b texts using Include get a hint that MIDI export does not help (picosakura cannot Include either)', () => {
+    for (const t of ['Include(delay.h) c', 'Int X=Random(1,6) Include(a.h)', '読む(a.h) c']) {
+      const e = err(t);
+      expect(e?.message, t).toContain('picosakura も Include に対応していない');
+      expect(e?.message, t).toContain('近似変換');
+      expect(e?.message, t).not.toContain('「MIDIを開く」で取り込む');
+    }
+    expect(err('Play(A)')?.message).toContain('「MIDIを開く」で取り込む');
   });
 
   it('L79 every conversion recompiles and matches (a mixed piece)', () => {
