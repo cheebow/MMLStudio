@@ -111,3 +111,34 @@ test('a Shift_JIS text file (Sakura board download) is read and converted', asyn
   await dialog.getByRole('button', { name: '変換', exact: true }).click();
   await expect(dialog.getByTestId('dialect-status')).toContainText('1 トラック・3 音');
 });
+
+test('an MSX-BASIC program is detected, converted, applied and played', async ({ page }) => {
+  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('変換する MML').fill(`10 ' テストの曲
+20 CALL MUSIC
+30 A$="T140@16O5L8CDEFGAB>C":B$="O3L2CGCG"
+40 PLAY #2,A$,"@33"+B$,"","B8H8S8H8B8H8S8H8","O4L1C"
+50 GOTO 40`);
+  await expect(dialog).toContainText('自動判定: MSX-BASIC');
+  await dialog.getByRole('button', { name: '変換', exact: true }).click();
+  await expect(dialog.getByTestId('dialect-status')).toContainText('4 パート');
+  await expect(dialog.getByTestId('dialect-warnings')).toContainText('1 回だけ演奏');
+  await expect(dialog.getByLabel('変換結果のプレビュー')).toContainText('MSX-BASIC PLAY から変換: テストの曲');
+  await dialog.getByRole('button', { name: 'エディタに反映' }).click();
+  await expect(page.getByText('問題はありません。')).toBeVisible();
+  await expect(page.locator('.track-table tbody tr')).toHaveCount(4);
+  await page.getByRole('button', { name: '再生', exact: true }).click();
+  await expect(page.getByTestId('player-state')).toHaveAttribute('data-state', 'playing', { timeout: 30_000 });
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+});
+
+test('a PC-8801 CMD PLAY program is detected and converted', async ({ page }) => {
+  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('変換する MML').fill('10 S=2:T=13\n20 CMD PLAY #S,"@=T;T120O4L8CDEFG","@4O2L2CG",,"V10O5C1"');
+  await expect(dialog).toContainText('自動判定: PC-8801');
+  await dialog.getByRole('button', { name: '変換', exact: true }).click();
+  await expect(dialog.getByTestId('dialect-status')).toContainText('3 パート');
+  await expect(dialog.getByLabel('変換結果のプレビュー')).toContainText('// @13 PIANO → @1 Acoustic Grand Piano');
+});

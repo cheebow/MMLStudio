@@ -1,6 +1,6 @@
 # MML Studio — Web MML Player 開発仕様書
 
-- **文書バージョン**: 1.5.0（実際のサクラ MML で使われる記法への対応、Shift_JIS の読み込み）
+- **文書バージョン**: 1.6.0（MSX-BASIC・PC-8801 N88-BASIC の音楽プログラムの変換）
 - **策定日**: 2026-10-31
 - **実装対象**: Web アプリケーション + 独立した TypeScript MML エンジン
 - **実装担当**: Claude Code
@@ -408,12 +408,12 @@ export function compareMidiEvents(original: ParsedMidi, compiled: CompiledSong):
 - 変換器は `src/engine/dialects/` の**独自 TypeScript** とし、DOM・音声ライブラリに依存しない。他の MML 処理系のコードは使わない。
 - 変換できない命令・推測で変換した命令は**黙って捨てず**、元テキストの行・列付きの警告にする（4.4 の MIDI インポートと同じ方針）。
 - MML/方言テキストはブラウザ内だけで処理し、外部へ送らない。
-- 対象方言は段階的に追加する。**Phase 6a: PC-9801 `PLAY` 文（下記の行番号形式）**、Phase 6b: picosakura（4.5.7〜4.5.11）。
+- 対象方言は段階的に追加する。**Phase 6a: PC-9801 `PLAY` 文（下記の行番号形式）**、Phase 6b: picosakura（4.5.7〜4.5.11）、Phase 6e: MSX-BASIC・PC-8801 N88-BASIC の音楽プログラム（4.5.14〜4.5.16）。
 
 ##### 4.5.2 公開 API（形の例）
 
 ```ts
-export type DialectId = 'pc98-play' | 'sakura';
+export type DialectId = 'pc98-play' | 'pc88-basic' | 'msx-basic' | 'sakura';
 export interface DialectSong { index: number; title?: string; startLine: number; parts: number }
 export interface DialectWarning { code: string; message: string; line: number; column: number; count?: number }
 export type DialectConvertResult =
@@ -643,6 +643,50 @@ export function convertDialect(text: string, dialect: DialectId, options?: { son
 | 未定義の `#マクロ`（近似変換） | 読み飛ばして警告（通常モードはエラー） |
 
 - 変換ダイアログの「テキストファイルを読み込む」は、UTF-8 として読めなければ **Shift_JIS** として読む（掲示板からダウンロードしたファイルは Shift_JIS）。Shift_JIS として読んだことを表示する。
+
+
+##### 4.5.14 BASIC の音楽プログラム（MSX-BASIC・PC-8801 N88-BASIC 共通）
+
+雑誌や本に載った音楽プログラムは、MML を文字列変数や `DATA` に入れて `PLAY` に渡す形が多い。そこで **BASIC の一部を変換時に実行**し、`PLAY` が各チャンネルに渡した文字列を集めて、PC-9801 と同じ MML 解釈（4.5.4、共通部 `play-core.ts`）で変換する。
+
+| 対象 | 扱い |
+|---|---|
+| 行 | `行番号 文[:文…]`。行番号の無い行も書かれた順に実行する。昇順でなければ警告。Ctrl-Z（0x1A）以降は読まない（ASCII 保存形式のファイル終端） |
+| 変数・式 | 数値・文字列変数（`A$`）、配列（`A$(I)`、`DIM` 不要）、`+ - * / \ MOD ^`、比較、`AND OR NOT XOR`、`&H` `&O` `&B`。関数 `CHR$ STR$ HEX$ LEFT$ RIGHT$ MID$ STRING$ SPACE$ LEN VAL ASC INT FIX ABS SGN`、`PLAY(n)` は 0（演奏の待ちはしない）、`INKEY$` は空文字列、`STICK`/`STRIG` は 0（入力なし。警告） |
+| 文 | `LET`/代入、`PLAY`、`FOR`/`NEXT`（`STEP`、入れ子、`NEXT J,I`）、`GOTO`/`GO TO`、`GOSUB`/`RETURN`、`ON … GOTO/GOSUB`、`IF … THEN … ELSE`（行番号・文の両方）、`READ`/`DATA`/`RESTORE`、`END`/`STOP`、`REM`/`'`、`DEFSTR` |
+| 音に関係しない文 | `PRINT` `CLS` `SCREEN` `COLOR` `WIDTH` `LOCATE` `KEY` `CLEAR` `DIM` `BEEP` `ON STOP GOSUB` `STOP ON` などは読み飛ばす（警告なし） |
+| ハードウェアへの直接の書き込み | `SOUND` `POKE` `OUT` `WAIT` などは読み飛ばして警告 |
+| 変換できないもの | `INPUT`、`RND`、`USR`、`PEEK` などはエラー（近似変換ではその文をスキップ） |
+| 演奏の繰り返し | 後ろ向きの `GOTO` で、前回その行に来たときと状態（変数の値・`DATA` の位置・`FOR`/`GOSUB` の状態）が同じなら無限ループとみなし、**1 回だけ演奏して終える**（警告）。実行は 200 万文まで（近似変換では、そこまでの演奏で終える） |
+| キーワードの区切り | 空白なしの書き方（`FORI=1TO2:PLAYA$`）は BASIC と同じくキーワード優先で区切る |
+| `PLAY` の文字列 | チャンネルごとのキューとみなし、各チャンネルの文字列を `PLAY` の順に連結する（チャンネル間で待ち合わせない）。O/L/V/T などの状態はチャンネルごとに続く |
+| `=変数;` | MML 中の `=V;` は、`PLAY` を実行した時点の数値変数の値に置き換える（`@=T;`、`O=N;`） |
+| 曲名 | 最初の `PLAY` より前の最初の `REM`/`'` を曲名とし、そのことをコメントに書く |
+| 出力 | `// <機種> PLAY から変換`、行末に元の BASIC の行番号（文字列を定義した行）を書く。テンポは最初に `T` を書いたチャンネルを基準にする（4.5.4 と同じ） |
+
+##### 4.5.15 MSX-BASIC
+
+仕様の根拠は msx.org の Wiki（`PLAY`、`CALL MUSIC`、`CALL VOICE`）。
+
+| 項目 | 扱い |
+|---|---|
+| `PLAY "a","b","c"`（`#0`） | PSG の 3 チャンネル。PSG の音色は `@81`（Lead 1 square）。PSG の `@` は無視して警告、`S`/`M`（エンベロープ）は変換しない |
+| `CALL MUSIC(モード,0,n1,n2,…)` / `_MUSIC` | `PLAY #2`（`#3`）の文字列の並びを決める: n の個数だけ FM のメロディ、モード 1 ならリズム 1 つ、その後に PSG 3 つ。引数なしは `(1,0,1,1,1)`。`CALL MUSIC` 無しで `PLAY #2` を使ったら既定とみなして警告。`CALL AUDIO` も同じ構成とみなす（推定・警告） |
+| FM 音色 `@0〜63`・`CALL VOICE(@a,@b,…)` | 内蔵音色の表（`msx-voices.ts`）で GM に近似。`CALL VOICE` は、その FM チャンネルを使う文字列の初期音色（最初の音の前）または途中の `@` とする |
+| MML の追加 | `X A$;`（文字列変数を実行、入れ子 16 段まで）、`=V;`、`@A`（アクセント音量） |
+| リズム（`PLAY #2` の FM リズム） | `B`=36 `S`=38 `M`=45 `C`=49 `H`=42 をチャンネル 10 に出力。文字が並ぶと同時に鳴り、数字（音長）で待つ。`!` はアクセント（`@A` の音量、初期値 15 と仮定） |
+| `PLAY #1`（MSX-MIDI） | `@n` は GM の音色番号 + 1 として変換（警告） |
+| 付点・`Q` | **付点は 1 個ごとに 1.5 倍**（`..` = 9/4、`...` = 27/8。N88 の「加算分の半分を足す」とは異なる）。PSG パートの `Q` は効果が無いため無視（警告） |
+| 変数名 | 先頭 2 文字が有効（`ABC$` と `ABD$` は同じ変数） |
+| その他の `CALL` | `CALL PITCH` `CALL BGM` `CALL TRANSPOSE` などは変換しない（警告） |
+
+##### 4.5.16 PC-8801 N88-BASIC
+
+| 項目 | 扱い |
+|---|---|
+| `CMD PLAY [#モード,]"1","2",…,"6"` / `PLAY …` | `#2`（既定）: 1〜3 が FM、4〜6 が SSG。`#0`: すべて SSG、`#5`: すべて FM、`#1`: MIDI（`@n` は GM + 1、警告）、`#3`/`#4`（効果音・CSM）はエラー |
+| チャンネル | `CMD PLAY` の n 番目の文字列を `TR(n) CH(n)` に出力（PC-9801 と同じ） |
+| MML・音色 | PC-9801 と同じ（4.5.4、付録 A の N88 音色表）。`=V;` を展開する |
 
 ---
 
@@ -913,6 +957,26 @@ mml-studio/
 | L78 | `Play(A)`、`Random(1,6)`、`Include(x)`、決まらない `If`、GS 以外の `SysEx`、`Array` | 行・列付きの未対応エラーと、MIDI 書き出しの案内 |
 | L79 | 上記すべて | 再コンパイルでエラー無し、変換器のイベント列と一致 |
 
+### Phase 6eの必須受け入れテスト（L100〜L114、4.5.14〜4.5.16）
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| L100 | 文字列変数・連結・`LET`・`CHR$`・`MID$`、`PLAY B$,,C$` | 連結された MML、空の文字列は無音 |
+| L101 | `READ`/`DATA`（引用符あり・なし）、`RESTORE`、`FOR … STEP -1`、`NEXT J,I` | 書かれた順に演奏 |
+| L102 | `GOSUB`/`RETURN`、`ON N GOTO`、`IF … THEN … ELSE`（文・行番号） | 分岐どおり |
+| L103 | `20 PLAY A$`／`30 GOTO 20`、カウンタのループ、`READ` の終端マーカー | 無限の繰り返しは 1 回（警告）、カウンタは回数分 |
+| L104 | 空白なし（`FORI=1TO2:PLAY"C":NEXT`）、MSX の変数名 2 文字 | 正しく区切る、`ABC$`=`ABD$`（PC-88 では別） |
+| L105 | `INPUT`、`RND`、不明な文 | エラー。近似変換ではスキップ |
+| L106 | MSX `PLAY` の 3 パート | PSG、初期値 O4 L4 T120 V8、`S`/`M`・`@` は警告 |
+| L107 | `CALL MUSIC`・`CALL MUSIC(0,0,1,1,1,1)`・`CALL VOICE`・`@33` | FM / リズム / PSG の割り当て、音色の近似 |
+| L108 | リズム `BH8H8S!8BSH4` | 同時発音・待ち・アクセント |
+| L109 | `X A$;`、`=V;` | 展開される。未定義はエラー |
+| L110 | `PLAY #1,"@40C"` | GM @41 |
+| L111 | `CMD PLAY "@13C",,,"D",,"E"` | チャンネル番号を保つ、N88 音色 |
+| L112 | `#0` / `#5` / `#3`、`PLAY` | SSG / FM / エラー、`PLAY` も同じ |
+| L113 | 方言の自動判定 | `CMD PLAY` → PC-8801、`CALL MUSIC`/`PLAY #2` → MSX |
+| L114 | 配列・`READ`・連結を使う曲 | 再コンパイル検証一致、曲名は最初の REM |
+
 ### Phase 6dの必須受け入れテスト（L90〜L99、4.5.13）
 
 | ID | 入力 | 期待結果 |
@@ -1011,6 +1075,11 @@ mml-studio/
 - 4.5.12 の実装、L80〜L89、変換ダイアログの近似変換チェックボックスと E2E、実ブラウザでの再生確認。
 - 推定の項目（`&&` の扱い、`=` の後の式の範囲、変数のスコープ、GS Use for Rhythm Part の扱い、未定義関数の最初の引数の演奏）を `docs/DECISIONS.md` に記録する。
 - 終了条件: L80〜L89 成功、プログラム機能を使った実際のサクラ MML を近似変換で再生でき、スキップした内容が警告に出ること。
+
+### Phase 6e — MSX-BASIC・PC-8801 N88-BASIC の音楽プログラム
+
+- 4.5.14〜4.5.16 の実装（PC-9801 の MML 解釈を共通部 `play-core.ts` に分ける。PC-9801 の結果は変えない）、L100〜L114、E2E。
+- 公開されている実際のプログラムを手元で変換して確認する（他者のプログラムはリポジトリに含めない）。
 
 ### Phase 6d — 実際のサクラ MML の記法
 

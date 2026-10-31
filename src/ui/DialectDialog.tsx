@@ -12,6 +12,8 @@ interface Props {
 
 const PLACEHOLDER: Record<DialectId, string> = {
   'pc98-play': '例:\n"0001","曲名",2,3,6\n01 "T140L8O4CDEFG","O3C2E2"\n02 "AB>C4","G1"',
+  'pc88-basic': '例:\n10 A$="T120@13O4L8CDEFGAB>C"\n20 B$="@4O2L2CG"\n30 CMD PLAY A$,B$',
+  'msx-basic': '例:\n10 CALL MUSIC\n20 A$="T120O4L8CDEFGAB>C"\n30 PLAY #2,A$,"O3C2G2","B8H8S8H8"',
   sakura: "例:\nTempo=120\nTR 1 @1 o5 l8 cdefgab>c\nTR 2 @33 o3 'ceg'2 'dfa'2\n// 日本語 MML も可: トラック３ 音階５ ドレミファソー",
 };
 
@@ -44,9 +46,10 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
     const g = guessDialect(t);
     if (g) setDialect(g);
   };
-  const convert = () => setResult(convertDialect(text, dialect, { songIndex, bestEffort: dialect === 'sakura' && bestEffort }));
+  const approxAvailable = dialect !== 'pc98-play';
+  const convert = () => setResult(convertDialect(text, dialect, { songIndex, bestEffort: approxAvailable && bestEffort }));
   const skippable = (r: DialectConvertResult | null) =>
-    !!r && !r.ok && dialect === 'sakura' && !bestEffort && r.errors.some((e) => ['E_SAKURA_UNSUPPORTED', 'E_SAKURA_EXPR', 'E_SAKURA_UNKNOWN'].includes(e.code));
+    !!r && !r.ok && approxAvailable && !bestEffort && r.errors.some((e) => !['E_DIALECT_NO_DATA', 'E_DIALECT_VERIFY', 'E_DIALECT_TOO_LARGE', 'E_BASIC_LIMIT', 'E_SAKURA_LIMIT'].includes(e.code));
   const title = songs[songIndex]?.title;
 
   return (
@@ -120,7 +123,7 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
             </select>
           </label>
         )}
-        {dialect === 'sakura' && (
+        {approxAvailable && (
           <label className="small">
             <input type="checkbox" checked={bestEffort} onChange={(e) => (setBestEffort(e.target.checked), setResult(null))} /> 変換できない命令はスキップする（近似変換）
           </label>
@@ -146,7 +149,7 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
       {result?.ok && (
         <>
           <p className="verify-ok" data-testid="dialect-status">
-            ✔ {result.summary.parts} {dialect === 'pc98-play' ? 'パート' : 'トラック'}・{result.summary.notes} 音を変換しました（{result.summary.approximate ? '近似変換・' : ''}再コンパイル検証 一致）
+            ✔ {result.summary.parts} {dialect === 'sakura' ? 'トラック' : 'パート'}・{result.summary.notes} 音を変換しました（{result.summary.approximate ? '近似変換・' : ''}再コンパイル検証 一致）
           </p>
           {result.summary.approximate && (
             <p className="msg-warning small" data-testid="dialect-approximate">

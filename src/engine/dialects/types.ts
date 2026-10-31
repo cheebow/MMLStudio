@@ -1,6 +1,6 @@
 // Types for converting other MML dialects into MML Studio MML (SPEC 4.5.2).
 
-export type DialectId = 'pc98-play' | 'sakura';
+export type DialectId = 'pc98-play' | 'pc88-basic' | 'msx-basic' | 'sakura';
 
 export interface DialectSong {
   index: number;

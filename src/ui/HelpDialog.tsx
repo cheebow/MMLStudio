@@ -128,8 +128,9 @@ export function HelpDialog({ open, onClose }: Props) {
           拍子・歌詞・SysEx・アフタータッチなど MML にできないイベントは件数付きで表示し、元 MIDI の直接再生では保持されます。
         </li>
         <li>
-          「他の MML から変換」で、PC-9801 の PLAY 文（<code>01 "…","…"</code> の形式）と picosakura（サクラ MML・日本語 MML）を MML Studio の MML に変換できます。
-          変換できない命令や推定で変換した命令は行・列付きで表示します。サクラのプログラム機能（変数の計算・For・関数など）を使った曲は、picosakura で MIDI を書き出して「MIDIを開く」で取り込んでください。
+          「他の MML から変換」で、PC-9801 の PLAY 文（<code>01 "…","…"</code> の形式）、MSX-BASIC・PC-8801 N88-BASIC の音楽プログラム（<code>PLAY</code> /{' '}
+          <code>CMD PLAY</code>）、picosakura（サクラ MML・日本語 MML）を MML Studio の MML に変換できます。
+          変換できない命令や推定で変換した命令は行・列付きで表示します。「変換できない命令はスキップする（近似変換）」をオンにすると、変換できない部分を飛ばして変換できます。
         </li>
         <li>MIDI チャンネルごとに TR(番号=チャンネル) にまとめ、CH を明示します。Time の小節・拍は常に 4/4 の座標で、元の拍子とは一致しないことがあります。</li>
         <li>編集内容はこのブラウザの localStorage に自動で下書き保存されます。ブラウザのデータを消去すると消えるので、大事な MML は「MML保存」でファイルに保存してください。</li>
