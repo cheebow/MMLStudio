@@ -1,7 +1,8 @@
 // SPEC 8 Phase 6a acceptance tests L47–L61: PC-9801 PLAY (article format) -> MML Studio MML.
 // All inputs are self-made (no third-party MML in the repository).
 import { describe, expect, it } from 'vitest';
-import { compileMml, convertDialect, guessDialect, listDialectSongs, type CompiledSong, type NoteEvent } from '../../src/engine';
+import { compileMml, type CompiledSong, type NoteEvent } from '../../src/engine';
+import { convertDialect, guessDialect, listDialectSongs } from '../../src/engine/dialects';
 
 function conv(text: string, songIndex = 0) {
   const r = convertDialect(text, 'pc98-play', { songIndex });

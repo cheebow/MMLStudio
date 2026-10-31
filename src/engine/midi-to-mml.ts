@@ -152,6 +152,24 @@ interface Group {
 
 function writeFidelityChannel(out: Lines, ch: CanonChannel, trackNames: Map<number, string>, note?: string): void {
   channelHeader(out, ch, trackNames, note);
+  writeFidelityBody(out, ch);
+}
+
+/**
+ * Exact-tick MML for one channel under a given TR number (used by dialect converters when
+ * notes of one channel overlap and cannot be written in their original order).
+ */
+export function exactTicksTrackLines(ch: CanonChannel, trackNumber: number, comment: string): string[] {
+  const out = new Lines();
+  out.raw('');
+  out.raw(comment);
+  out.add(`TR(${trackNumber})`, `CH(${ch.channel + 1})`);
+  writeFidelityBody(out, ch);
+  out.flush();
+  return out.lines;
+}
+
+function writeFidelityBody(out: Lines, ch: CanonChannel): void {
   const byTick = new Map<number, { controls: CanonControl[]; groups: Map<string, Group> }>();
   const at = (tick: number) => {
     let e = byTick.get(tick);

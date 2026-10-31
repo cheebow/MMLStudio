@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { convertDialect, DIALECTS, guessDialect, listDialectSongs, type DialectConvertResult, type DialectId } from '../engine';
+import { convertDialect, DIALECTS, guessDialect, listDialectSongs, type DialectConvertResult, type DialectId } from '../engine/dialects';
 import { readUtf8 } from '../utils/files';
 import { Modal } from './Modal';
 
@@ -9,6 +9,11 @@ interface Props {
   /** Called with the converted MML; the parent confirms / backs up before replacing the editor. */
   onApply: (mml: string, title: string | undefined) => void;
 }
+
+const PLACEHOLDER: Record<DialectId, string> = {
+  'pc98-play': '例:\n"0001","曲名",2,3,6\n01 "T140L8O4CDEFG","O3C2E2"\n02 "AB>C4","G1"',
+  sakura: "例:\nTempo=120\nTR 1 @1 o5 l8 cdefgab>c\nTR 2 @33 o3 'ceg'2 'dfa'2\n// 日本語 MML も可: トラック３ 音階５ ドレミファソー",
+};
 
 /** Paste MML written for another dialect and convert it into MML Studio MML (SPEC 4.5.6). */
 export function DialectDialog({ open, onClose, onApply }: Props) {
@@ -84,7 +89,7 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
         className="dialect-input"
         aria-label="変換する MML"
         spellCheck={false}
-        placeholder={'例:\n"0001","曲名",2,3,6\n01 "T140L8O4CDEFG","O3C2E2"\n02 "AB>C4","G1"'}
+        placeholder={PLACEHOLDER[dialect]}
         value={text}
         onChange={(e) => changeText(e.target.value)}
       />
@@ -121,7 +126,7 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
       {result?.ok && (
         <>
           <p className="verify-ok" data-testid="dialect-status">
-            ✔ {result.summary.parts} パート・{result.summary.notes} 音を変換しました（再コンパイル検証 一致）
+            ✔ {result.summary.parts} {dialect === 'pc98-play' ? 'パート' : 'トラック'}・{result.summary.notes} 音を変換しました（再コンパイル検証 一致）
           </p>
           {result.warnings.length > 0 && (
             <div className="msg-warning small" data-testid="dialect-warnings">

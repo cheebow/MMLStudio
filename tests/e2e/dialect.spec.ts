@@ -58,3 +58,29 @@ test('conversion errors are shown with line and column; nothing is applied', asy
   await expect(dialog.getByTestId('dialect-errors')).toContainText('2行4列');
   await expect(dialog.getByRole('button', { name: 'エディタに反映' })).toHaveCount(0);
 });
+
+test('picosakura (Japanese MML) is detected, converted, applied and played', async ({ page }) => {
+  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('変換する MML').fill('曲名{"ドレミの歌"}\nテンポ１２０\nトラック１ 音色１ 音階５ 八分音符\nドレミファソーラシ 「ドミソ」４\nトラック２ 音色３３ 音階３ ド２ ソ２');
+  await expect(dialog).toContainText('自動判定: picosakura');
+  await dialog.getByRole('button', { name: '変換', exact: true }).click();
+  await expect(dialog.getByTestId('dialect-status')).toContainText('2 トラック');
+  await expect(dialog.getByLabel('変換結果のプレビュー')).toContainText('picosakura から変換: ドレミの歌');
+  await dialog.getByRole('button', { name: 'エディタに反映' }).click();
+  await expect(page.getByTestId('doc-name')).toContainText('ドレミの歌.mml');
+  await expect(page.getByText('問題はありません。')).toBeVisible();
+  await page.getByRole('button', { name: '再生', exact: true }).click();
+  await expect(page.getByTestId('player-state')).toHaveAttribute('data-state', 'playing', { timeout: 30_000 });
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+});
+
+test('picosakura programs show the MIDI export hint', async ({ page }) => {
+  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('方言').selectOption('sakura');
+  await dialog.getByLabel('変換する MML').fill('TR 1\nFor(Int I = 0; I < 4; I++){ c }');
+  await dialog.getByRole('button', { name: '変換', exact: true }).click();
+  await expect(dialog.getByTestId('dialect-errors')).toContainText('2行1列');
+  await expect(dialog.getByTestId('dialect-errors')).toContainText('MIDIを開く');
+});

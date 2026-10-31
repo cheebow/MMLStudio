@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { compileMml, LIMITS, MIDI_LIMITS, ticksToSeconds, writeSmf, type CompileResult, type CompiledSong, type Diagnostic, type MidiImportOptions } from './engine';
 import { usePlayer } from './hooks/usePlayer';
 import { DEFAULT_SAMPLE, SAMPLES } from './samples';
-import { DialectDialog } from './ui/DialectDialog';
 import { DiagnosticsPanel } from './ui/DiagnosticsPanel';
 import { HelpDialog } from './ui/HelpDialog';
 import { InstrumentDialog } from './ui/InstrumentDialog';
@@ -15,6 +14,9 @@ import { TransportBar } from './ui/TransportBar';
 import { loadDraft, saveDraft } from './utils/draft';
 import { baseName, downloadBytes, readUtf8 } from './utils/files';
 import { MidiImportCancelled, runMidiImportWithFallback } from './workers/midiImportClient';
+
+// The dialect converters are only needed when the dialog is opened (keeps the initial bundle small).
+const DialectDialog = lazy(() => import('./ui/DialectDialog').then((m) => ({ default: m.DialectDialog })));
 
 const COMPILE_DEBOUNCE_MS = 250;
 const MAX_COMPILE_DEBOUNCE_MS = 2000;
@@ -443,7 +445,11 @@ export default function App() {
       <HelpDialog open={dialog === 'help'} onClose={() => setDialog(null)} />
       <InstrumentDialog open={dialog === 'instruments'} onClose={() => setDialog(null)} />
       <LicenseDialog open={dialog === 'license'} onClose={() => setDialog(null)} />
-      <DialectDialog open={dialog === 'dialect'} onClose={() => setDialog(null)} onApply={applyDialect} />
+      {dialog === 'dialect' && (
+        <Suspense fallback={null}>
+          <DialectDialog open onClose={() => setDialog(null)} onApply={applyDialect} />
+        </Suspense>
+      )}
     </div>
   );
 }
