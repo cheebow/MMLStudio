@@ -1,6 +1,6 @@
 # MML Studio — Web MML Player 開発仕様書
 
-- **文書バージョン**: 1.3.0（他方言 MML の変換: PC-9801 PLAY、picosakura）
+- **文書バージョン**: 1.4.0（picosakura のプログラム機能の解釈と近似変換モード）
 - **策定日**: 2026-10-31
 - **実装対象**: Web アプリケーション + 独立した TypeScript MML エンジン
 - **実装担当**: Claude Code
@@ -417,10 +417,10 @@ export type DialectId = 'pc98-play' | 'sakura';
 export interface DialectSong { index: number; title?: string; startLine: number; parts: number }
 export interface DialectWarning { code: string; message: string; line: number; column: number; count?: number }
 export type DialectConvertResult =
-  | { ok: true; mml: string; warnings: DialectWarning[]; summary: { dialect: DialectId; parts: number; notes: number; verified: boolean } }
+  | { ok: true; mml: string; warnings: DialectWarning[]; summary: { dialect: DialectId; parts: number; notes: number; verified: boolean; approximate?: boolean } }
   | { ok: false; errors: DialectWarning[] };
 export function listDialectSongs(text: string, dialect: DialectId): DialectSong[];
-export function convertDialect(text: string, dialect: DialectId, options?: { songIndex?: number }): DialectConvertResult;
+export function convertDialect(text: string, dialect: DialectId, options?: { songIndex?: number; bestEffort?: boolean }): DialectConvertResult;
 ```
 
 - 変換器は出力 MML を `compileMml` で**再コンパイル**し、エラーが無いこと、および変換器自身が求めた音符列（音高・開始 tick・発音長・ベロシティ・チャンネル）と一致することを確認する（4.4.3 A-5 と同じ考え方）。一致しなければ `ok: false`。
@@ -503,15 +503,17 @@ export function convertDialect(text: string, dialect: DialectId, options?: { son
 
 ##### 4.5.7 picosakura（サクラ MML）— 対象範囲
 
-- 対象は**MML の記述部分**（英字の MML と日本語 MML）。曲のデータを直接書いたものを変換する。
-- 次の**プログラム機能は対象外**とし、使われていれば行・列付きの「未対応」エラーにする。案内として「picosakura で MIDI を書き出し、『MIDIを開く』で取り込む」方法を表示する。
-  - `Int`（整数リテラルの定数定義を除く）・`Str`（`{…}` リテラルの定義を除く）・`Array` の変数と式（`+` `-` などの演算、関数呼び出し）
-  - `For` / `While` / `IF` / `ELSE` / `Function` / `Return` / `Break` / `Continue` / `Exit`
+- 対象は**MML の記述部分**（英字の MML と日本語 MML）と、**変換時に値が決まるプログラム機能**（4.5.12）。
+- 次の機能は**変換時に結果が決まらない**ため、通常は行・列付きの「未対応」エラーにする。案内として「picosakura で MIDI を書き出し、『MIDIを開く』で取り込む」方法を表示する。**近似変換モード**（4.5.12）では、これらを警告付きでスキップして変換を続ける。
+  - `Array`、文字列の連結、値が決まらない式・条件（未定義の名前など）
   - `Play()` / `Print()` / `Replace()` / `Mid()` などの文字列操作、`Random()` / `RandomSelect()` / `.Random` / `RandomSeed`
-  - `Include` / `読む`、`SysEx` / `DirectSMF` / `NoteOn` / `NoteOff`、GS・XG の個別設定命令
+  - `Include` / `読む`（読み込むファイルの内容が分からない）と、その中で定義される命令（未定義の名前）
+  - `SysEx`（GS の Use for Rhythm Part を除く）/ `DirectSMF` / `NoteOn` / `NoteOff`、GS・XG の個別設定命令
 - 1 回の貼り付けを 1 曲として扱う。入力の上限は 2 MiB（4.5.2 と同じ）。
 
 ##### 4.5.8 picosakura — 前処理
+
+（`Int` / `Str` / `Function` などのプログラム機能は前処理では展開せず、解釈時に実行する。4.5.12）
 
 処理順は次のとおり。
 
@@ -520,9 +522,9 @@ export function convertDialect(text: string, dialect: DialectId, options?: { son
 3. **日本語の置き換え**（付録 B の表）: **長い語から優先**して置き換える（`方向左前` は `方向左` より先）。ドラム用のひらがな（`ず` `た` `つ` `ち` `ぱ` `と` `む` `ろ` `く`）は `リズム` / `Rhythm{…}` の中だけで置き換える（推定）。`ファ` / `ふぁ` は 1 語として `f` にする。
 4. **マクロ・定数の展開**:
    - `#名前={…}` を定義し、`#名前` で展開する。引数 `#?1` `#?2` を持つマクロは `#名前{…},…` の呼び出しで展開する。
-   - `Str 名前={…}` を定義し、MML 中の `名前` で展開する。`Int 名前=整数` を定義し、命令の引数の `名前` を整数として使う。
+   - `Str 名前={…}` / `Int 名前=式` は解釈時の変数として扱う（4.5.12）。ただし整数リテラルの `Int` 定数は、繰り返しの回数（`[N c]`）にも使える。
    - 展開の入れ子は 16 段まで（超えたらエラー）。
-5. **ループの展開**: `[n … : … ]` を展開する。`n` 省略時は 2 回（推定）。`:` は最終回に抜ける。入れ子可。展開後の長さが 4.1 の上限を超えたらエラー。
+5. **ループの展開**: `[n … : … ]` を展開する。`n` 省略時は 2 回（推定）。`:` は最終回に抜ける。入れ子可。展開後の長さが 4.1 の上限を超えたらエラー。繰り返しの前後と各回の間には空白を入れ、名前がつながらないようにする（`[2 O1]` → `O1 O1`）。
 6. **解釈**: 下の 4.5.9 の表で、トラックごとの音符・コントローラ・テンポのイベント列にする（大文字・小文字を区別する。例: `v` はベロシティ、`V` はメインボリューム）。
 
 ##### 4.5.9 picosakura — 命令の変換表
@@ -588,6 +590,31 @@ export function convertDialect(text: string, dialect: DialectId, options?: { son
 - できるだけ元の並びを保ち、音名・`o`・`l`・分母式の音長で書く。元の行番号を行末コメントに残す（PC-9801 と同じ）。
 - 変換器が求めたイベント列（音高・開始 tick・発音長・ベロシティ・チャンネル、テンポ、音色、CC、PB）と、出力 MML を再コンパイルした結果が一致することを確認する（4.5.2）。
 - `guessDialect` は、`Track` / `TR` / `Tempo=` / `#…={` / 日本語の音名などの特徴から picosakura を候補として提示する（確定はユーザー）。
+
+##### 4.5.12 picosakura — プログラム機能と近似変換モード
+
+サクラのプログラムを**変換時に実行**し、結果の音符・コントローラを 4.5.9 と同じ規則で出力する。
+
+| 機能 | 扱い |
+|---|---|
+| `Int 名前=式` / `Int 名前` / `名前=式` / `名前++` / `名前+=式` | 整数の変数（初期値 0）。式は `+ - * / %`、比較 `== != < > <= >=`、`&& || !`、括弧、`$16進`。整数の割り算は切り捨て |
+| `Str 名前={…}` / `名前` | 文字列の変数。MML 中の `名前` で中身を解釈する。和音の中（`'OA'`）にも書ける |
+| `Function 名前(引数,…){…}` | 関数。引数は型なし / `Int` / `Str`、`名前=既定値` を持てる。呼び出しは `名前(…)`・`名前=値`・`名前` |
+| `If(条件){…} Else If(…){…} Else{…}` | 条件を評価して該当する本体を実行 |
+| `For(初期化; 条件; 更新){…}` / `While(条件){…}` / `Break` / `Continue` / `Return` / `Exit` | 繰り返しは 100,000 回まで |
+| 式の中の特別な名前 | `CH` / `Channel` = 現在のチャンネル、`TR` / `Track` = 現在のトラック番号、`MML(v)` / `MML(o)` / `MML(q)` / `MML(l)` = 現在の値、`DeviceNumber` = `$10` |
+| 命令の引数の式 | `v=(X8)` `v(J)` `q=(10+A*10)` `r%(Dly)` `p%=-100` `@(X3,XA,XB)` `TrackKey=(K+3)`。括弧の無い `=` の後は `+ - * /` でつながる範囲だけを式とみなす（`DL=BGN-1MNH` は `BGN-1` の後に `MNH`） |
+| `SysEx` の GS Use for Rhythm Part（`F0 41 dev 42 12 40 1x 15 vv`） | そのチャンネルをドラムとみなし、出力ではチャンネル 10 にまとめる（音色・バンク指定は出力しない）。それ以外の `SysEx` は未対応 |
+| `&&` | `&` と同じく前の音を隙間なく鳴らす（推定・警告） |
+| 音符の後の単独の `^`（`c&&^`） | 直前の音を伸ばす |
+
+**近似変換モード**（`convertDialect(text, 'sakura', { bestEffort: true })`、UI の「変換できない命令はスキップする（近似変換）」）:
+
+- 4.5.7 の未対応機能・値の決まらない式・未定義の名前を、行・列付きの警告（`W_SAKURA_APPROX`）にしてスキップする。黙って捨てない。
+- 値の決まらない条件の `If` / `For` / `While` は、その文全体を実行しない。
+- 未定義の名前の呼び出しで最初の引数が `{…}` のもの（例: `Include` したファイルの `MidiDelay({…},8,!2)`）は、その MML を 1 回だけ演奏し、関数自体の効果は再現しないことを警告する。
+- 出力の先頭に「近似変換」のコメントを書き、`summary.approximate = true` とする。UI でも近似変換であることを表示する。再コンパイル検証（4.5.11）は通常どおり行う。
+- 既定（オフ）では従来どおり、最初の未対応箇所でエラーにして MIDI 書き出しを案内する。
 
 ---
 
@@ -855,8 +882,23 @@ mml-studio/
 | L75 | `Rhythm{ b8 h8 s8 h8 }` / `$x{n37,}` を定義して使用 | n36 n42 n38 n42 / n37 |
 | L76 | 日本語 `音階５ ドレミファー ソッ「ドミソ」４ テンポ１２０ トラック２ ペダル 放す` | 英字 MML と同じ結果 |
 | L77 | `//` `/* */` `##` `# ` のコメント、`{"…"}` 内の日本語 | コメントは無視、文字列内は置き換えない |
-| L78 | `Int I=3+1`、`For(...)`、`Play(A)`、`Random(1,6)`、`Include(x)` | 行・列付きの未対応エラーと、MIDI 書き出しの案内 |
+| L78 | `Play(A)`、`Random(1,6)`、`Include(x)`、決まらない `If`、GS 以外の `SysEx`、`Array` | 行・列付きの未対応エラーと、MIDI 書き出しの案内 |
 | L79 | 上記すべて | 再コンパイルでエラー無し、変換器のイベント列と一致 |
+
+### Phase 6cの必須受け入れテスト（L80〜L89、4.5.12）
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| L80 | `Int A=3+1`、`A++`、`A+=1`、`Key=K+1c`、`$10+2` | 式の値どおり。`=` の後の式は MML の手前で終わる |
+| L81 | 型なし・`STR`・既定値付きの `Function`、`DL=2` / `V2` / `HAM({c})` の呼び出し | 引数が渡り、`Sub` 内の `Key` も効く |
+| L82 | `If(CH==2){…}Else If(CH==3){…}Else{…}` を 3 トラックで実行 / `If(MODE1==GS)` | チャンネルごとに分岐 / 通常はエラー、近似変換では警告してスキップ |
+| L83 | `For(Int A=0;A<3;A++){q=(50+A*20) c}`、`While` と `Break`、`FOR(INT B;…)` | ゲート 120/168/216、2 音、2 音 |
+| L84 | 和音の中の `Str`（`'OA'`）、`[2A]`、`Int N=3 [N c]` | 展開される |
+| L85 | `@(X3,XA,0)`、`v=(100-20)`、`MML(v)`、`p%=-100` | `@12` とバンク、ベロシティ 90、PB −100 |
+| L86 | `c&&^d`、単独の `^` | `&&` は `&` と同じ、`^` は直前の音を伸ばす |
+| L87 | GS Use for Rhythm Part の `SysEx` を CH11 に送る | CH11 の音がチャンネル 10 にまとまる |
+| L88 | `Include`、`MidiDelay({…})`、未定義の `Foo(1)`、GS 以外の `SysEx` | 通常はエラー。近似変換では警告付きで `{…}` を 1 回演奏、他はスキップ、`approximate = true` |
+| L89 | 関数でトラックを設定し `Time` を関数で指定する曲 | 再コンパイル検証一致、テンポ・開始位置・音数が期待どおり |
 
 テストデータは自作する。他者が作成した MML はリポジトリに含めない。
 
@@ -920,6 +962,12 @@ mml-studio/
 - 4.5.7〜4.5.11 の実装、L62〜L79、変換ダイアログでの方言選択と E2E、実ブラウザでの再生確認。
 - 推定の項目（付録 B のドラム語の適用範囲、`l` / `q` の初期値、`vAdd` の初期値、`^` の省略時の長さ、`8+2`、`[` の省略時の回数、和音内の `o`、`MeasureShift`、最初のトラック、音色名の照合）を `docs/DECISIONS.md` に記録する。
 - 終了条件: L62〜L79 成功、実際のサクラ MML を手元で変換して再生でき、未対応の曲では理由と代替手段が示されること。
+
+### Phase 6c — picosakura のプログラム機能と近似変換
+
+- 4.5.12 の実装、L80〜L89、変換ダイアログの近似変換チェックボックスと E2E、実ブラウザでの再生確認。
+- 推定の項目（`&&` の扱い、`=` の後の式の範囲、変数のスコープ、GS Use for Rhythm Part の扱い、未定義関数の最初の引数の演奏）を `docs/DECISIONS.md` に記録する。
+- 終了条件: L80〜L89 成功、プログラム機能を使った実際のサクラ MML を近似変換で再生でき、スキップした内容が警告に出ること。
 
 **MVP（Phase 0〜3）とMIDIインポート拡張（Phase 4）のそれぞれで必須の全項目が実ブラウザで動くまでは、該当段階を「完成」と判定しない。**
 

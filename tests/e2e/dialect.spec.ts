@@ -75,12 +75,24 @@ test('picosakura (Japanese MML) is detected, converted, applied and played', asy
   await page.getByRole('button', { name: '停止', exact: true }).click();
 });
 
-test('picosakura programs show the MIDI export hint', async ({ page }) => {
+test('picosakura programs show the MIDI export hint; best-effort mode skips what cannot be converted', async ({ page }) => {
   await page.getByRole('button', { name: '他の MML から変換' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('方言').selectOption('sakura');
-  await dialog.getByLabel('変換する MML').fill('TR 1\nFor(Int I = 0; I < 4; I++){ c }');
+  await dialog.getByLabel('変換する MML').fill('TR 1\nInclude(delay.h) For(Int I = 0; I < 4; I++){ c }\nMidiDelay({d},8,!2)');
   await dialog.getByRole('button', { name: '変換', exact: true }).click();
   await expect(dialog.getByTestId('dialect-errors')).toContainText('2行1列');
   await expect(dialog.getByTestId('dialect-errors')).toContainText('MIDIを開く');
+  await expect(dialog.getByTestId('dialect-errors')).toContainText('近似変換');
+
+  // best-effort: Include and the unknown MidiDelay are skipped with warnings; For is interpreted
+  await dialog.getByLabel('変換できない命令はスキップする（近似変換）').check();
+  await dialog.getByRole('button', { name: '変換', exact: true }).click();
+  await expect(dialog.getByTestId('dialect-status')).toContainText('1 トラック・5 音');
+  await expect(dialog.getByTestId('dialect-status')).toContainText('近似変換');
+  await expect(dialog.getByTestId('dialect-approximate')).toBeVisible();
+  await expect(dialog.getByTestId('dialect-warnings')).toContainText('Include');
+  await expect(dialog.getByTestId('dialect-warnings')).toContainText('MidiDelay');
+  await dialog.getByRole('button', { name: 'エディタに反映' }).click();
+  await expect(page.getByText('問題はありません。')).toBeVisible();
 });

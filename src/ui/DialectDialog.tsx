@@ -28,6 +28,7 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
   const [text, setText] = useState('');
   const [dialect, setDialect] = useState<DialectId>('pc98-play');
   const [songIndex, setSongIndex] = useState(0);
+  const [bestEffort, setBestEffort] = useState(false);
   const [result, setResult] = useState<DialectConvertResult | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -41,7 +42,9 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
     const g = guessDialect(t);
     if (g) setDialect(g);
   };
-  const convert = () => setResult(convertDialect(text, dialect, { songIndex }));
+  const convert = () => setResult(convertDialect(text, dialect, { songIndex, bestEffort: dialect === 'sakura' && bestEffort }));
+  const skippable = (r: DialectConvertResult | null) =>
+    !!r && !r.ok && dialect === 'sakura' && !bestEffort && r.errors.some((e) => ['E_SAKURA_UNSUPPORTED', 'E_SAKURA_EXPR', 'E_SAKURA_UNKNOWN'].includes(e.code));
   const title = songs[songIndex]?.title;
 
   return (
@@ -106,6 +109,11 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
             </select>
           </label>
         )}
+        {dialect === 'sakura' && (
+          <label className="small">
+            <input type="checkbox" checked={bestEffort} onChange={(e) => (setBestEffort(e.target.checked), setResult(null))} /> 変換できない命令はスキップする（近似変換）
+          </label>
+        )}
         <button type="button" className="tool-btn" onClick={convert} disabled={text.trim() === ''}>
           変換
         </button>
@@ -121,13 +129,19 @@ function DialectForm({ onApply }: Pick<Props, 'onApply'>) {
               </li>
             ))}
           </ul>
+          {skippable(result) && <p>「変換できない命令はスキップする（近似変換）」をオンにすると、変換できない部分を飛ばして変換できます（元の曲と同じには鳴りません）。</p>}
         </div>
       )}
       {result?.ok && (
         <>
           <p className="verify-ok" data-testid="dialect-status">
-            ✔ {result.summary.parts} {dialect === 'pc98-play' ? 'パート' : 'トラック'}・{result.summary.notes} 音を変換しました（再コンパイル検証 一致）
+            ✔ {result.summary.parts} {dialect === 'pc98-play' ? 'パート' : 'トラック'}・{result.summary.notes} 音を変換しました（{result.summary.approximate ? '近似変換・' : ''}再コンパイル検証 一致）
           </p>
+          {result.summary.approximate && (
+            <p className="msg-warning small" data-testid="dialect-approximate">
+              ⚠ 変換できない命令をスキップしたため、元の曲と同じには鳴りません。スキップした内容は下の注意（「近似変換」と書かれた項目）を確認してください。
+            </p>
+          )}
           {result.warnings.length > 0 && (
             <div className="msg-warning small" data-testid="dialect-warnings">
               ⚠ 注意（{result.warnings.length} 種類）:

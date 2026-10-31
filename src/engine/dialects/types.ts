@@ -20,6 +20,12 @@ export interface DialectWarning {
   count?: number;
 }
 
+/** `bestEffort`: skip what cannot be converted (with warnings) instead of failing (picosakura only). */
+export interface DialectOptions {
+  songIndex?: number;
+  bestEffort?: boolean;
+}
+
 export type DialectConvertResult =
-  | { ok: true; mml: string; warnings: DialectWarning[]; summary: { dialect: DialectId; parts: number; notes: number; verified: boolean } }
+  | { ok: true; mml: string; warnings: DialectWarning[]; summary: { dialect: DialectId; parts: number; notes: number; verified: boolean; approximate?: boolean } }
   | { ok: false; errors: DialectWarning[] };

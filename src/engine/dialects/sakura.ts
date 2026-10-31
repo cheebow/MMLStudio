@@ -7,6 +7,7 @@ import { exactTicksTrackLines } from '../midi-to-mml';
 import type { CanonChannel, CanonControl, CanonNote, CanonSong } from '../midi-types';
 import { PPQ } from '../types';
 import { DialectError, fail, gateOf, lengthParts, NOTE_NAMES, singleToken, timeOf, Warnings, WHOLE } from './common';
+import { evalExpr, ExprError, truthy, type ExprEnv, type SValue } from './sakura-expr';
 import type { DialectConvertResult, DialectSong } from './types';
 
 /* ================================================================== characters */
@@ -64,6 +65,18 @@ function stripComments(src: SChar[]): SChar[] {
       lineStart = false;
       continue;
     }
+    // TrackName={...} / Copyright={...}: the text inside is a string (may contain any character)
+    if (c === '{' && META_BRACE.test(tailText(out))) {
+      const close = src.findIndex((x, k) => k > i && x.ch === '}');
+      if (close > 0) {
+        out.push(src[i]);
+        for (let k = i + 1; k < close; k++) out.push({ ...src[k], str: true });
+        out.push(src[close]);
+        i = close;
+        lineStart = false;
+        continue;
+      }
+    }
     if (c === '/' && n === '/') {
       while (i < src.length && src[i].ch !== '\n') i++;
       i--;
@@ -88,6 +101,14 @@ function stripComments(src: SChar[]): SChar[] {
     out.push(src[i]);
   }
   return out;
+}
+
+const META_BRACE = /(TrackName|TRACK_NAME|Copyright|COPYRIGHT|MetaText|Text|TEXT|Lyric|LYRIC|InstrumentName|CuePoint|Maker|MAKER|曲名|作者|コメント)\s*=?\s*$/;
+
+function tailText(a: SChar[]): string {
+  let s = '';
+  for (let i = a.length - 1; i >= 0 && s.length < 24; i--) s = a[i].ch + s;
+  return s;
 }
 
 function lastNonSpace(a: SChar[]): SChar | undefined {
@@ -270,11 +291,10 @@ function replaceJapanese(src: SChar[], warn: Warnings): SChar[] {
 
 const UNSUPPORTED = new Set(
   [
-    'Array', 'ARRAY', 'For', 'FOR', 'While', 'WHILE', 'IF', 'If', 'ELSE', 'Else', 'Function', 'FUNCTION', 'Return', 'RETURN',
-    'Break', 'BREAK', 'Continue', 'CONTINUE', 'Exit', 'EXIT', 'Result', 'Play', 'PLAY', 'Print', 'PRINT', 'Replace', 'REPLACE',
+    'Result', 'Play', 'PLAY', 'Print', 'PRINT', 'Replace', 'REPLACE',
     'Mid', 'MID', 'Random', 'RANDOM', 'RandomInt', 'RND', 'Rnd', 'RandomSelect', 'RandomSeed', 'RANDOM_SEED', 'System.RandomSeed',
-    'Include', 'INCLUDE', 'System.Include', 'SysEx', 'DirectSMF', 'NoteOn', 'NoteOff', 'RPN', 'NRPN', 'ArrayFlatten', 'SizeOf',
-    'StrLen', 'Chr', 'Asc', 'Hex', 'Pos', 'NoteNo', 'MML', 'OctaveUnison', 'Unison', 'Unison5th', 'Unison3th', 'RndTiming',
+    'Include', 'INCLUDE', 'System.Include', 'DirectSMF', 'NoteOn', 'NoteOff', 'RPN', 'NRPN', 'ArrayFlatten', 'SizeOf',
+    'StrLen', 'Chr', 'Asc', 'Hex', 'Pos', 'NoteNo', 'OctaveUnison', 'Unison', 'Unison5th', 'Unison3th', 'RndTiming',
   ],
 );
 
@@ -372,54 +392,11 @@ function expand(src: SChar[], defs: Defs, depth: number, warn: Warnings): SChar[
       i = next - 1;
       continue;
     }
-    // An uppercase letter starts a word even right after lowercase MML (e.g. `cE` = note c + Str E).
+    // Str / Int / Function and the other program statements are evaluated by the interpreter (runtime).
+    // Skip over words so that `#` inside them is not taken as a macro.
     if (isUpperStart(c.ch)) {
       let k = i;
-      let word = '';
-      while (isIdent(src[k]?.ch) || (src[k]?.ch === '.' && isUpperStart(src[k + 1]?.ch))) word += src[k++].ch;
-      if (word === 'Str' || word === 'STR' || word === 'Int' || word === 'INT') {
-        const ns = skipSpace(src, k);
-        let name = '';
-        let e = ns;
-        while (isIdent(src[e]?.ch)) name += src[e++].ch;
-        if (!name) fail('E_SAKURA_UNSUPPORTED', `${word} の後に変数名が必要です。`, c);
-        if (!isUpperStart(name[0])) fail('E_SAKURA_UNSUPPORTED', `小文字で始まる変数名（${name}）は音符と区別できないため未対応です。${MIDI_HINT}`, src[ns]);
-        const eq = skipSpace(src, e);
-        if (src[eq]?.ch !== '=') fail('E_SAKURA_UNSUPPORTED', `値の無い ${word} 宣言は未対応です。${MIDI_HINT}`, c);
-        const v = skipSpace(src, eq + 1);
-        if (word === 'Str' || word === 'STR') {
-          if (src[v]?.ch !== '{') fail('E_SAKURA_UNSUPPORTED', `Str の値が {…} 以外（式など）の場合は未対応です。${MIDI_HINT}`, src[v] ?? c);
-          const { body, end } = readBraces(src, v);
-          const after = skipSpace(src, end + 1);
-          if (src[after]?.ch === '+') fail('E_SAKURA_UNSUPPORTED', `文字列の連結は未対応です。${MIDI_HINT}`, src[after]);
-          defs.strs.set(name, body);
-          i = end;
-          continue;
-        }
-        let e2 = v;
-        let num = '';
-        if (src[e2]?.ch === '-' || src[e2]?.ch === '+') num += src[e2++].ch;
-        while (/[0-9]/.test(src[e2]?.ch ?? '')) num += src[e2++].ch;
-        const after = skipSpace(src, e2);
-        if (!/^[+-]?\d+$/.test(num) || /[-+*/%(]/.test(src[after]?.ch ?? '')) {
-          fail('E_SAKURA_UNSUPPORTED', `Int の値が整数以外（式など）の場合は未対応です。${MIDI_HINT}`, src[v] ?? c);
-        }
-        defs.ints.set(name, Number(num));
-        i = e2 - 1;
-        continue;
-      }
-      if (defs.strs.has(word)) {
-        out.push(...expand(defs.strs.get(word)!, defs, depth + 1, warn));
-        i = k - 1;
-        continue;
-      }
-      if (defs.ints.has(word)) {
-        out.push(...charsOf(String(defs.ints.get(word)), c));
-        i = k - 1;
-        continue;
-      }
-      if (UNSUPPORTED.has(word)) fail('E_SAKURA_UNSUPPORTED', `${word} は未対応です（プログラム機能など）。${MIDI_HINT}`, c);
-      for (let x = i; x < k; x++) out.push(src[x]);
+      while (isIdent(src[k]?.ch)) out.push(src[k++]);
       i = k - 1;
       continue;
     }
@@ -460,7 +437,19 @@ function expandRhythm(src: SChar[], defs: Defs): SChar[] {
 
 /* ================================================================== 6. loops */
 
-function expandLoops(src: SChar[]): SChar[] {
+/** `Int NAME=<integer literal>` constants, usable as loop counts (`[N c]`). */
+function literalInts(src: SChar[]): Map<string, number> {
+  const text = src.map((c) => (c.str ? ' ' : c.ch)).join('');
+  const found = new Map<string, number | null>();
+  for (const m of text.matchAll(/\b(?:Int|INT)\s+([A-Za-z_]\w*)\s*=\s*([+-]?\d+)(?![\d*/+\-(])/g)) {
+    found.set(m[1], found.has(m[1]) && found.get(m[1]) !== Number(m[2]) ? null : Number(m[2]));
+  }
+  const out = new Map<string, number>();
+  for (const [k, v] of found) if (v !== null) out.set(k, v);
+  return out;
+}
+
+function expandLoops(src: SChar[], ints: Map<string, number> = new Map()): SChar[] {
   const out: SChar[] = [];
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
@@ -473,6 +462,15 @@ function expandLoops(src: SChar[]): SChar[] {
     let k = skipSpace(src, i + 1);
     let count = '';
     while (/[0-9]/.test(src[k]?.ch ?? '')) count += src[k++].ch;
+    if (count === '' && isUpperStart(src[k]?.ch)) {
+      let e = k;
+      let name = '';
+      while (isIdent(src[e]?.ch)) name += src[e++].ch;
+      if (ints.has(name)) {
+        count = String(ints.get(name));
+        k = e;
+      }
+    }
     const times = count === '' ? 2 : Number(count);
     let depth = 1;
     let paren = 0;
@@ -493,11 +491,14 @@ function expandLoops(src: SChar[]): SChar[] {
       } else if (x.ch === ':' && depth === 1 && paren === 0 && colon < 0) colon = j;
     }
     if (end < 0) fail('E_SAKURA_SYNTAX', '繰り返し [ が ] で閉じられていません。', c);
-    const body = expandLoops(src.slice(k, colon >= 0 ? colon : end));
-    const tail = colon >= 0 ? expandLoops(src.slice(colon + 1, end)) : [];
+    const body = expandLoops(src.slice(k, colon >= 0 ? colon : end), ints);
+    const tail = colon >= 0 ? expandLoops(src.slice(colon + 1, end), ints) : [];
+    // a blank between the repetitions keeps words apart (`[2 O1]` -> `O1 O1`, not `O1O1`)
+    const sep = { ...c, ch: ' ' };
+    out.push(sep);
     for (let t = 0; t < times; t++) {
-      out.push(...body);
-      if (t < times - 1) out.push(...tail);
+      out.push(...body, sep);
+      if (t < times - 1 && tail.length) out.push(...tail, sep);
       if (out.length > MAX_EXPANDED) fail('E_SAKURA_LIMIT', '繰り返しを展開した MML が大きすぎます。', c);
     }
     out.push({ ...c, ch: ' ' });
@@ -539,7 +540,60 @@ interface Song {
   vtracks: VTrack[];
   tempos: Array<{ tick: number; us: number; bpm: number | null; at: Pos }>;
   meta: Array<{ kind: string; text: string }>;
+  /** channels switched to rhythm parts by a GS "Use for Rhythm Part" SysEx */
+  drumChannels: Map<number, Pos>;
 }
+
+type Var = { t: 'int'; v: number } | { t: 'str'; chars: SChar[] };
+type Param = { name: string; type: 'int' | 'str' | 'any'; def?: string };
+interface FuncDef {
+  name: string;
+  params: Param[];
+  body: SChar[];
+}
+
+/** control flow of Sakura programs (not errors) */
+class ReturnSignal {}
+class BreakSignal {}
+class ContinueSignal {}
+
+const MAX_LOOP = 100_000;
+const MAX_STEPS = 20_000_000;
+const MAX_CALL_DEPTH = 64;
+/** codes that stop a strict conversion but are skipped (with a warning) in best-effort mode */
+const NOT_SKIPPABLE = new Set(['E_SAKURA_LIMIT', 'E_SAKURA_MACRO', 'E_SAKURA_COMMENT', 'E_SAKURA_STRING']);
+const KEYWORDS_INT = new Set(['Int', 'INT']);
+const KEYWORDS_STR = new Set(['Str', 'STR']);
+
+const textOf = (chars: SChar[]) => chars.map((c) => c.ch).join('');
+function trimChars(chars: SChar[]): SChar[] {
+  let a = 0;
+  let b = chars.length;
+  while (a < b && /\s/.test(chars[a].ch) && !chars[a].str) a++;
+  while (b > a && /\s/.test(chars[b - 1].ch) && !chars[b - 1].str) b--;
+  return chars.slice(a, b);
+}
+/** split at `sep` outside ( ) and { } */
+function splitTop(chars: SChar[], sep: string): SChar[][] {
+  const out: SChar[][] = [];
+  let depth = 0;
+  let cur: SChar[] = [];
+  for (const c of chars) {
+    if (!c.str) {
+      if (c.ch === '(' || c.ch === '{') depth++;
+      else if (c.ch === ')' || c.ch === '}') depth--;
+      else if (c.ch === sep && depth === 0) {
+        out.push(cur);
+        cur = [];
+        continue;
+      }
+    }
+    cur.push(c);
+  }
+  out.push(cur);
+  return out;
+}
+const isBraced = (chars: SChar[]) => chars.length >= 2 && chars[0].ch === '{' && !chars[0].str && chars[chars.length - 1].ch === '}';
 
 const SEMI: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
 const KEYFLAG_ORDER = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
@@ -576,7 +630,15 @@ function voiceByName(name: string, at: Pos): number {
 
 class Interpreter {
   private p = 0;
-  readonly song: Song = { vtracks: [], tempos: [], meta: [] };
+  readonly song: Song = { vtracks: [], tempos: [], meta: [], drumChannels: new Map() };
+  /** variables: global scope first, one more per function call */
+  private readonly scopes: Array<Map<string, Var>> = [new Map()];
+  private readonly funcs = new Map<string, FuncDef>();
+  private callDepth = 0;
+  private steps = 0;
+  private includeSeen = false;
+  /** a warning or skip changed the result (best-effort mode) */
+  approximate = false;
   private readonly tracks = new Map<number, TrackState>();
   private cur: TrackState;
   private timeBase = 96;
@@ -589,9 +651,10 @@ class Interpreter {
   private ended = false;
 
   constructor(
-    private readonly src: SChar[],
+    private src: SChar[],
     private readonly warn: Warnings,
     meta: Array<{ kind: string; text: string }>,
+    private readonly bestEffort = false,
   ) {
     this.song.meta = meta;
     this.cur = this.track(1);
@@ -697,7 +760,7 @@ class Interpreter {
         ticks = Math.round(ticks);
       } else if (this.peek() === '%') {
         this.p++;
-        ticks = this.stepTicks(this.need(this.int(), '%', at), at);
+        ticks = this.stepTicks(this.need(this.intArg(), '%', at), at);
       } else if (/[0-9]/.test(this.peek())) {
         const n = this.int() as number;
         if (n < 1) fail('E_SAKURA_RANGE', `音長 ${n} は使えません。`, at);
@@ -871,14 +934,23 @@ class Interpreter {
         if (depth !== 0) fail('E_SAKURA_SYNTAX', '{ が } で閉じられていません。', this.src[start]);
         return [s.slice(1)];
       }
-      return readUntil(null);
+      return this.exprList();
     }
     if (this.peek() === '{') {
       const v = this.args2braces();
       return [v];
     }
-    if (/[0-9+-]/.test(this.peek())) return readUntil(null);
+    if (/[0-9+-]/.test(this.peek())) return this.exprList();
     return null;
+  }
+  /** `=1,2` / ` 1`: comma-separated expressions */
+  private exprList(): string[] {
+    const out = [textOf(this.readExprChars()).trim()];
+    while (this.peek() === ',' && /[0-9A-Za-z_($+-]/.test(this.peek(1))) {
+      this.p++;
+      out.push(textOf(this.readExprChars()).trim());
+    }
+    return out;
   }
   private args2braces(): string {
     let depth = 0;
@@ -895,8 +967,9 @@ class Interpreter {
     return s.slice(1);
   }
   private num(s: string | undefined, what: string, at: Pos): number {
-    if (s === undefined || !/^[+-]?\d+$/.test(s.trim())) fail('E_SAKURA_VALUE', `${what} の値「${s ?? ''}」を数値として読めません（式や変数は未対応）。`, at);
-    return Number(s.trim());
+    if (s === undefined || s.trim() === '') fail('E_SAKURA_VALUE', `${what} の後に数値が必要です。`, at);
+    if (/^[+-]?\d+$/.test(s.trim())) return Number(s.trim());
+    return Math.trunc(this.evalNum(s, what, at));
   }
   /** skip `(...)` / `=...` arguments of a command that is not converted */
   private skipArgs(): void {
@@ -905,13 +978,230 @@ class Interpreter {
 
   /* ---------------------------------------------------------- main loop */
   run(): void {
+    try {
+      this.loop();
+    } catch (e) {
+      if (e instanceof ReturnSignal || e instanceof BreakSignal || e instanceof ContinueSignal) return;
+      throw e;
+    }
+  }
+
+  private loop(): void {
     while (this.p < this.src.length && !this.ended) {
       this.spaces();
       if (this.p >= this.src.length) break;
-      const before = this.p;
-      this.command();
-      if (this.p === before) this.p++;
+      this.step();
     }
+  }
+
+  /** Interprets `chars` (a Str value, function body, If / For body) and returns to the current position. */
+  private execDepth = 0;
+  private exec(chars: SChar[]): void {
+    if (this.execDepth >= 256) fail('E_SAKURA_MACRO', 'Str・関数の展開が深すぎます（再帰している可能性があります）。', this.at());
+    this.execDepth++;
+    const save = { src: this.src, p: this.p };
+    this.src = chars;
+    this.p = 0;
+    try {
+      this.loop();
+    } finally {
+      this.src = save.src;
+      this.p = save.p;
+      this.execDepth--;
+    }
+  }
+
+  /** One command. In best-effort mode, errors become warnings and the command is skipped. */
+  private step(): void {
+    if (++this.steps > MAX_STEPS) fail('E_SAKURA_LIMIT', '処理が多すぎるため変換を中止しました（無限ループの可能性があります）。', this.at());
+    const before = this.p;
+    try {
+      this.command();
+    } catch (e) {
+      if (!(e instanceof DialectError) || !this.bestEffort || NOT_SKIPPABLE.has(e.issue.code)) throw e;
+      this.skipped(e.issue.message.replace(MIDI_HINT, '').trim(), e.issue);
+    }
+    if (this.p === before) this.p++;
+  }
+
+  /** best-effort: record something that was not converted */
+  private skipped(message: string, at: Pos, suffix = '（近似変換: スキップしました）'): void {
+    this.approximate = true;
+    this.warn.add('W_SAKURA_APPROX', `${message}${suffix}`, at);
+  }
+
+  /** strict: error / best-effort: warning */
+  private unsupported(message: string, at: Pos): void {
+    if (!this.bestEffort) fail('E_SAKURA_UNSUPPORTED', `${message}${MIDI_HINT}`, at);
+    this.skipped(message, at);
+  }
+
+  /* ---------------------------------------------------------- variables and expressions */
+  private lookupVar(name: string): Var | undefined {
+    for (let i = this.scopes.length - 1; i >= 0; i--) {
+      const v = this.scopes[i].get(name);
+      if (v) return v;
+    }
+    return undefined;
+  }
+  private setVar(name: string, v: Var, declare: boolean): void {
+    if (!declare) {
+      for (let i = this.scopes.length - 1; i >= 0; i--) {
+        if (this.scopes[i].has(name)) {
+          this.scopes[i].set(name, v);
+          return;
+        }
+      }
+    }
+    this.scopes[this.scopes.length - 1].set(name, v);
+  }
+
+  private readonly env: ExprEnv = {
+    lookup: (name) => {
+      const v = this.lookupVar(name);
+      if (v) return v.t === 'int' ? v.v : textOf(v.chars);
+      switch (name) {
+        case 'CH':
+        case 'Channel':
+        case 'CHANNEL':
+          return this.cur.vtrack.channel;
+        case 'TR':
+        case 'Track':
+        case 'TRACK':
+          return this.cur.id;
+        case 'DeviceNumber':
+          return 0x10;
+        case 'TRUE':
+        case 'True':
+        case 'true':
+          return 1;
+        case 'FALSE':
+        case 'False':
+        case 'false':
+          return 0;
+      }
+      return undefined;
+    },
+    call: (name, args) => {
+      if (name === 'MML' && args.length === 1) {
+        const a = args[0].trim();
+        if (a === 'v') return this.cur.velocity;
+        if (a === 'o') return this.cur.octave;
+        if (a === 'q' && this.cur.gate.mode === 'percent') return this.cur.gate.value;
+        if (a === 'l') return Math.round((this.cur.length * this.timeBase) / PPQ);
+        if (a === 'TrackKey') return this.cur.trackKey;
+      }
+      return undefined;
+    },
+  };
+
+  private evalValue(text: string, what: string, at: Pos): SValue {
+    try {
+      return evalExpr(text, this.env);
+    } catch (e) {
+      if (e instanceof ExprError) fail('E_SAKURA_EXPR', `${what} の値「${text.trim()}」を変換時に求められません（${e.message}）。${MIDI_HINT}`, at);
+      throw e;
+    }
+  }
+  private evalNum(text: string, what: string, at: Pos): number {
+    const v = this.evalValue(text, what, at);
+    if (typeof v === 'number') return v;
+    if (/^\s*[+-]?\d+(\.\d+)?\s*$/.test(v)) return Number(v);
+    fail('E_SAKURA_EXPR', `${what} の値「${text.trim()}」は数値ではありません（「${v}」）。${MIDI_HINT}`, at);
+  }
+
+  /** at `(`: the chars inside the balanced parentheses; moves past `)` */
+  private parenChars(): SChar[] {
+    const open = this.p;
+    let depth = 0;
+    for (let k = open; k < this.src.length; k++) {
+      const c = this.src[k];
+      if (c.str) continue;
+      if (c.ch === '(' || c.ch === '{') depth++;
+      else if (c.ch === ')' || c.ch === '}') {
+        depth--;
+        if (depth === 0) {
+          this.p = k + 1;
+          return this.src.slice(open + 1, k);
+        }
+      }
+    }
+    fail('E_SAKURA_SYNTAX', '( が ) で閉じられていません。', this.src[open]);
+  }
+  /** at `{`: the chars inside the braces; moves past `}` */
+  private braceChars(): SChar[] {
+    const { body, end } = readBraces(this.src, this.p);
+    this.p = end + 1;
+    return body;
+  }
+
+  /**
+   * One expression written after `=` without parentheses (`DL=BGN-1MNH` reads `BGN-1`).
+   * Only + - * / join operands, so the MML that follows is not taken in.
+   */
+  private readExprChars(): SChar[] {
+    const start = this.p;
+    let expectOperand = true;
+    for (;;) {
+      if (expectOperand) {
+        this.blanks();
+        const c = this.peek();
+        if (c === '-' || c === '+' || c === '!') {
+          this.p++;
+          continue;
+        }
+        if (c === '(') this.parenChars();
+        else if (c === '{') this.braceChars();
+        else if (/[0-9]/.test(c)) {
+          while (/[0-9]/.test(this.peek()) || (this.peek() === '.' && /[0-9]/.test(this.peek(1)))) this.p++;
+        } else if (c === '$' && /[0-9A-Fa-f]/.test(this.peek(1))) {
+          this.p++;
+          while (/[0-9A-Fa-f]/.test(this.peek())) this.p++;
+        } else if (/[A-Za-z_]/.test(c)) {
+          while (/[A-Za-z0-9_]/.test(this.peek())) this.p++;
+          if (this.peek() === '(') this.parenChars();
+        } else break;
+        expectOperand = false;
+      } else {
+        const c = this.peek();
+        if ('+-*/'.includes(c) && c !== '' && /[0-9A-Za-z_($]/.test(this.peek(1))) {
+          this.p++;
+          expectOperand = true;
+          continue;
+        }
+        break;
+      }
+    }
+    return this.src.slice(start, this.p);
+  }
+
+  /** `v=(X8)`, `v(J)`, `@N`, `p%=-100`: a numeric command argument. null when absent. */
+  private intArg(signed = false): number | null {
+    const save = this.p;
+    const at = this.at();
+    this.blanks();
+    if (this.peek() === '=' && this.peek(1) !== '=') {
+      this.p++;
+      this.blanks();
+    }
+    if (this.peek() === '(') {
+      const inner = this.parenChars();
+      return Math.trunc(this.evalNum(textOf(inner), '引数', at));
+    }
+    const n = this.int(signed);
+    if (n !== null) return n;
+    if (isUpperStart(this.peek())) {
+      let k = this.p;
+      let name = '';
+      while (isIdent(this.src[k]?.ch)) name += this.src[k++].ch;
+      const v = this.lookupVar(name);
+      if (v?.t === 'int') {
+        this.p = k;
+        return v.v;
+      }
+    }
+    this.p = save;
+    return null;
   }
 
   private command(): void {
@@ -947,14 +1237,7 @@ class Interpreter {
       case 'o': {
         this.p++;
         this.blanks();
-        let v: number | null;
-        if (this.peek() === '(') {
-          this.p++;
-          v = this.int();
-          this.blanks();
-          if (this.peek() === ')') this.p++;
-        } else v = this.int();
-        const o = this.need(v, 'o', at);
+        const o = this.need(this.intArg(), 'o', at);
         if (o < 0 || o > 10) fail('E_SAKURA_RANGE', `o${o} は範囲外です（0〜10）。`, at);
         this.cur.octave = o;
         return;
@@ -998,8 +1281,8 @@ class Interpreter {
           this.cur.velocity = Math.max(0, this.cur.velocity - this.vAdd);
           return;
         }
-        const v = this.need(this.int(), 'v', at);
-        if (v > 127) fail('E_SAKURA_RANGE', `v${v} は範囲外です（0〜127）。`, at);
+        const v = this.need(this.intArg(), 'v', at);
+        if (v > 127 || v < 0) fail('E_SAKURA_RANGE', `v${v} は範囲外です（0〜127）。`, at);
         this.cur.velocity = v;
         return;
       }
@@ -1017,10 +1300,10 @@ class Interpreter {
         this.blanks();
         if (this.peek() === '%') {
           this.p++;
-          this.cur.gate = { mode: 'ticks', value: this.stepTicks(this.need(this.int(), 'q%', at), at) };
+          this.cur.gate = { mode: 'ticks', value: this.stepTicks(this.need(this.intArg(), 'q%', at), at) };
           return;
         }
-        const q = this.need(this.int(), 'q', at);
+        const q = this.need(this.intArg(), 'q', at);
         if (q > 100) this.warn.add('W_SAKURA_GATE', `q${q} は 100 として変換しました。`, at);
         this.cur.gate = { mode: 'percent', value: Math.min(100, q) };
         return;
@@ -1038,11 +1321,11 @@ class Interpreter {
         this.blanks();
         if (this.peek() === '%') {
           this.p++;
-          const v = this.need(this.int(true), 'p%', at);
+          const v = this.need(this.intArg(true), 'p%', at);
           this.bend(v, at);
           return;
         }
-        const v = this.need(this.int(), 'p', at);
+        const v = this.need(this.intArg(), 'p', at);
         this.bend(Math.max(-8192, Math.min(8191, (v - 64) * 128)), at);
         return;
       }
@@ -1064,15 +1347,25 @@ class Interpreter {
         this.p++;
         this.blanks();
         if (this.peek() === '(') {
-          this.p++;
-          let name = '';
-          while (this.p < this.src.length && this.peek() !== ')') name += this.src[this.p++].ch;
-          this.p++;
+          const inner = this.parenChars();
+          // @(n,msb,lsb) with expressions, or @(voice name)
+          const parts = splitTop(inner, ',').map((x) => textOf(x));
+          let nums: number[] | null = null;
+          try {
+            nums = parts.map((x) => Math.trunc(this.evalNum(x, '@', at)));
+          } catch (e) {
+            if (!(e instanceof DialectError)) throw e;
+          }
+          if (nums) {
+            this.program(nums[0], nums[1] ?? null, nums[2] ?? null, at);
+            return;
+          }
+          const name = textOf(inner);
           this.program(voiceByName(name, at) + 1, null, null, at);
           this.warn.add('W_SAKURA_VOICE_NAME', `音色名「${name.trim()}」を GM 音色名と照合しました（推定）。`, at);
           return;
         }
-        const n = this.need(this.int(), '@', at);
+        const n = this.need(this.intArg(), '@', at);
         let msb: number | null = null;
         let lsb: number | null = null;
         if (this.peek() === ',') {
@@ -1095,11 +1388,22 @@ class Interpreter {
         return;
       case '&':
         this.p++;
+        if (this.peek() === '&') {
+          this.p++;
+          this.warn.add('W_SAKURA_DOUBLE_AMP', '&& は & と同じく、前の音を次の音まで隙間なく鳴らす形で変換しました（音高の滑らかな変化は再現しません・推定）。', at);
+        }
         this.pendingTie = true;
         return;
-      case '^':
-        fail('E_SAKURA_SYNTAX', '^ の前に音符か休符が必要です。', at);
-        break;
+      case '^': {
+        // `c&&^` / `c ^`: lengthen the previous note when it ends here
+        const prev = this.lastNote();
+        if (!prev || prev.start + prev.duration !== this.cur.cursor) fail('E_SAKURA_SYNTAX', '^ の前に音符か休符が必要です。', at);
+        this.p++;
+        const add = this.length(at) ?? this.cur.length;
+        prev.duration += add;
+        this.cur.cursor += add;
+        return;
+      }
       case '}':
         fail('E_SAKURA_SYNTAX', '対応する { のない } です。', at);
         break;
@@ -1170,6 +1474,16 @@ class Interpreter {
       else if (c === 'n') {
         const no = this.need(this.int(), 'n', here);
         pitches.push(no + this.key + this.cur.trackKey);
+      } else if (isUpperStart(c)) {
+        // a Str inside a chord (`'OA'`): splice its text in place
+        let k = this.p - 1;
+        let name = '';
+        while (isIdent(this.src[k]?.ch)) name += this.src[k++].ch;
+        const v = this.lookupVar(name);
+        if (v?.t !== 'str') fail('E_SAKURA_SYNTAX', `和音の中に書けない名前です: ${name}`, here);
+        this.src = [...this.src.slice(0, this.p - 1), ...v.chars, ...this.src.slice(k)];
+        this.p--;
+        if (this.src.length > MAX_EXPANDED) fail('E_SAKURA_LIMIT', '展開後の MML が大きすぎます。', here);
       } else fail('E_SAKURA_SYNTAX', `和音の中に書けない文字です: ${c}`, here);
     }
     if (pitches.length === 0) fail('E_SAKURA_SYNTAX', '和音に音がありません。', at);
@@ -1205,9 +1519,7 @@ class Interpreter {
           this.p++;
           break;
         }
-        const before = this.p;
-        this.command();
-        if (this.p === before) this.p++;
+        this.step();
         if (this.cur !== track || track.vtrack !== vtrack) fail('E_SAKURA_SYNTAX', '連符の中でトラックやチャンネルは変えられません。', at);
       }
     } finally {
@@ -1277,10 +1589,17 @@ class Interpreter {
 
   private word(at: Pos): void {
     let name = '';
-    while (/[A-Za-z0-9_]/.test(this.peek()) || (this.peek() === '.' && /[A-Za-z]/.test(this.peek(1)) && /^(System|[A-Z]{1,3}|PitchBend|Modulation|Expression|Panpot)$/.test(name))) {
+    while (/[A-Za-z0-9_]/.test(this.peek()) || (this.peek() === '.' && /[A-Za-z]/.test(this.peek(1)) && name !== '')) {
       name += this.src[this.p++].ch;
     }
+    if (this.statement(name, at)) return;
     const base = name.includes('.') ? name.slice(0, name.indexOf('.')) : name;
+    if (name.includes('.') && (IGNORE.has(base) || WARN_SKIP.has(base))) {
+      // PlayFrom.SysEx=1 ...
+      this.skipArgs();
+      if (WARN_SKIP.has(base)) this.warn.add('W_SAKURA_SKIP', `${name} は変換しません。`, at);
+      return;
+    }
     if (name.includes('.') && base !== 'System') {
       // P.onNoteWave(...), EP.W(...), PitchBend.T(...) ...
       this.skipArgs();
@@ -1307,7 +1626,7 @@ class Interpreter {
       case 'T':
       case 'BPM': {
         const v = a()?.[0];
-        const bpm = Number(v);
+        const bpm = v === undefined || v.trim() === '' ? NaN : this.evalNum(v, 'テンポ', at);
         if (v === undefined || !Number.isFinite(bpm) || bpm <= 0) fail('E_SAKURA_VALUE', `テンポの値「${v ?? ''}」を読めません。`, at);
         this.song.tempos.push({ tick: this.cur.cursor, us: Math.round(60_000_000 / bpm), bpm: Number.isInteger(bpm) && bpm >= 20 && bpm <= 300 ? bpm : null, at });
         return;
@@ -1361,18 +1680,19 @@ class Interpreter {
         this.p++;
         const start = this.cur.cursor;
         const track = this.cur;
-        for (;;) {
-          this.spaces();
-          if (this.p >= this.src.length) fail('E_SAKURA_SYNTAX', 'Sub{ が } で閉じられていません。', at);
-          if (this.peek() === '}') {
-            this.p++;
-            break;
+        try {
+          for (;;) {
+            this.spaces();
+            if (this.p >= this.src.length) fail('E_SAKURA_SYNTAX', 'Sub{ が } で閉じられていません。', at);
+            if (this.peek() === '}') {
+              this.p++;
+              break;
+            }
+            this.step();
           }
-          const before = this.p;
-          this.command();
-          if (this.p === before) this.p++;
+        } finally {
+          track.cursor = start;
         }
-        track.cursor = start;
         return;
       }
       case 'Div':
@@ -1432,6 +1752,11 @@ class Interpreter {
       case 'END':
         this.ended = true;
         return;
+      case 'SysEx':
+      case 'SYSEX':
+      case 'SysEx$':
+        this.sysex(at);
+        return;
     }
     if (META.has(name)) {
       const v = a()?.[0] ?? '';
@@ -1455,8 +1780,417 @@ class Interpreter {
       return;
     }
     if (RHYTHM_WORDS.includes(name) || name === 'R') fail('E_SAKURA_SYNTAX', `${name} の後に { … } が必要です。`, at);
-    if (UNSUPPORTED.has(name) || /^(Int|INT|Str|STR)$/.test(name) || /^(GS|XG)/.test(name)) fail('E_SAKURA_UNSUPPORTED', `${name} は未対応です（プログラム機能など）。${MIDI_HINT}`, at);
-    fail('E_SAKURA_UNKNOWN', `不明な命令または未定義の名前です: ${name}`, at);
+    if (UNSUPPORTED.has(name) || /^(GS|XG)/.test(name)) {
+      this.blanks();
+      if (this.peek() === '(' || (this.peek() === '=' && this.peek(1) !== '=')) this.skipArgs();
+      if (/^(Include|INCLUDE|System\.Include)$/.test(name)) {
+        this.includeSeen = true;
+        this.unsupported(`${name} は未対応です（読み込むファイルの内容が分からないため、そのファイルで定義された命令は再現できません）。`, at);
+      } else this.unsupported(`${name} は未対応です（プログラム機能など）。`, at);
+      return;
+    }
+    this.unknownName(name, at);
+  }
+
+  /** A name that is neither a command nor defined in the pasted text. */
+  private unknownName(name: string, at: Pos): void {
+    this.blanks();
+    let args: SChar[][] | null = null;
+    if (this.peek() === '(') args = splitTop(this.parenChars(), ',').map(trimChars);
+    else if (this.peek() === '=' && this.peek(1) !== '=') {
+      this.p++;
+      this.readExprChars();
+    }
+    const hint = this.includeSeen ? '（Include したファイルで定義されている可能性があります）' : '';
+    if (!this.bestEffort) fail('E_SAKURA_UNKNOWN', `不明な命令または未定義の名前です: ${name}${hint}`, at);
+    const first = args?.[0];
+    if (first && isBraced(first)) {
+      this.skipped(`${name}(…) は定義が分からないため、最初の引数 {…} の MML を 1 回だけ演奏しました（${name} 自体の効果は再現しません）。${hint}`, at, '（近似変換）');
+      this.exec(first.slice(1, -1));
+    } else this.skipped(`不明な命令または未定義の名前 ${name} を読み飛ばしました。${hint}`, at, '（近似変換）');
+  }
+
+  /* ---------------------------------------------------------- program statements (SPEC 4.5.12) */
+
+  /** Int / Str / Function / If / For / While / user functions / variables. true when handled. */
+  private statement(name: string, at: Pos): boolean {
+    if (KEYWORDS_INT.has(name)) {
+      this.declInt(at);
+      return true;
+    }
+    if (KEYWORDS_STR.has(name)) {
+      this.declStr(at);
+      return true;
+    }
+    switch (name) {
+      case 'Array':
+      case 'ARRAY':
+        this.skipStatement();
+        this.unsupported('Array（配列）は未対応です。', at);
+        return true;
+      case 'Function':
+      case 'FUNCTION':
+        this.defineFunction(at);
+        return true;
+      case 'If':
+      case 'IF':
+        this.ifStatement(at);
+        return true;
+      case 'For':
+      case 'FOR':
+        this.forStatement(at, false);
+        return true;
+      case 'While':
+      case 'WHILE':
+        this.forStatement(at, true);
+        return true;
+      case 'Return':
+      case 'RETURN':
+      case 'Result':
+        this.blanks();
+        if (this.peek() === '(') this.parenChars();
+        throw new ReturnSignal();
+      case 'Break':
+      case 'BREAK':
+        throw new BreakSignal();
+      case 'Continue':
+      case 'CONTINUE':
+        throw new ContinueSignal();
+      case 'Exit':
+      case 'EXIT':
+        this.ended = true;
+        return true;
+      case 'Else':
+      case 'ELSE':
+        fail('E_SAKURA_SYNTAX', 'If の無い Else です。', at);
+    }
+    const f = this.funcs.get(name);
+    if (f) {
+      this.callFunction(f, at);
+      return true;
+    }
+    const v = this.lookupVar(name);
+    if (!v) return false;
+    this.blanks();
+    const c = this.peek();
+    const n = this.peek(1);
+    if (v.t === 'int' && ((c === '+' && n === '+') || (c === '-' && n === '-'))) {
+      this.p += 2;
+      this.setVar(name, { t: 'int', v: v.v + (c === '+' ? 1 : -1) }, false);
+    } else if (v.t === 'int' && '+-*/'.includes(c) && c !== '' && n === '=') {
+      this.p += 2;
+      const e = textOf(this.readExprChars());
+      this.setVar(name, { t: 'int', v: Math.trunc(this.evalNum(`(${name})${c}(${e})`, name, at)) }, false);
+    } else if (c === '=' && n !== '=') {
+      this.p++;
+      if (v.t === 'int') this.setVar(name, { t: 'int', v: Math.trunc(this.evalNum(textOf(this.readExprChars()), name, at)) }, false);
+      else this.setVar(name, { t: 'str', chars: this.strValue(at) }, false);
+    } else if (v.t === 'str') {
+      this.exec(v.chars);
+    } else {
+      this.warn.add('W_SAKURA_BARE_INT', `Int 変数 ${name} が単独で書かれているため無視しました。`, at);
+    }
+    return true;
+  }
+
+  /** skip to the end of the statement (`;` or the end of the line) */
+  private skipStatement(): void {
+    let depth = 0;
+    while (this.p < this.src.length) {
+      const c = this.src[this.p];
+      if (!c.str) {
+        if (c.ch === '(' || c.ch === '{') depth++;
+        else if (c.ch === ')' || c.ch === '}') {
+          if (depth === 0) return;
+          depth--;
+        } else if (depth === 0 && (c.ch === ';' || c.ch === '\n')) return;
+      }
+      this.p++;
+    }
+  }
+
+  private ident(): string {
+    this.blanks();
+    let name = '';
+    while (/[A-Za-z0-9_]/.test(this.peek()) && (name !== '' || /[A-Za-z_]/.test(this.peek()))) name += this.src[this.p++].ch;
+    return name;
+  }
+
+  private declInt(at: Pos): void {
+    for (;;) {
+      const name = this.ident();
+      if (!name) fail('E_SAKURA_SYNTAX', 'Int の後に変数名が必要です。', at);
+      this.blanks();
+      let v = 0;
+      if (this.peek() === '=' && this.peek(1) !== '=') {
+        this.p++;
+        v = Math.trunc(this.evalNum(textOf(this.readExprChars()), `Int ${name}`, at));
+      }
+      this.setVar(name, { t: 'int', v }, true);
+      this.blanks();
+      if (this.peek() === ',' && /[A-Za-z_ ]/.test(this.peek(1))) {
+        this.p++;
+        continue;
+      }
+      return;
+    }
+  }
+
+  private declStr(at: Pos): void {
+    const name = this.ident();
+    if (!name) fail('E_SAKURA_SYNTAX', 'Str の後に変数名が必要です。', at);
+    this.blanks();
+    let chars: SChar[] = [];
+    if (this.peek() === '=' && this.peek(1) !== '=') {
+      this.p++;
+      chars = this.strValue(at);
+    }
+    this.setVar(name, { t: 'str', chars }, true);
+  }
+
+  /** after `Str X=`: `{…}` or another Str */
+  private strValue(at: Pos): SChar[] {
+    this.blanks();
+    let chars: SChar[] | null = null;
+    if (this.peek() === '{') chars = this.braceChars();
+    else if (isUpperStart(this.peek())) {
+      const save = this.p;
+      const v = this.lookupVar(this.ident());
+      if (v?.t === 'str') chars = v.chars;
+      else this.p = save;
+    }
+    if (chars === null) {
+      this.readExprChars();
+      fail('E_SAKURA_UNSUPPORTED', `Str の値が {…} 以外（式など）の場合は未対応です。${MIDI_HINT}`, at);
+    }
+    this.blanks();
+    if (this.peek() === '+') {
+      this.p++;
+      this.readExprChars();
+      fail('E_SAKURA_UNSUPPORTED', `文字列の連結は未対応です。${MIDI_HINT}`, at);
+    }
+    return chars;
+  }
+
+  private defineFunction(at: Pos): void {
+    const name = this.ident();
+    if (!name) fail('E_SAKURA_SYNTAX', 'Function の後に関数名が必要です。', at);
+    this.blanks();
+    const params: Param[] = [];
+    if (this.peek() === '(') {
+      for (const raw of splitTop(this.parenChars(), ',')) {
+        const t = textOf(raw).trim();
+        if (!t) continue;
+        const m = /^(?:(Str|STR|Int|INT|Array|ARRAY)\s+)?([A-Za-z_]\w*)\s*(?:=\s*([\s\S]*))?$/.exec(t);
+        if (!m) fail('E_SAKURA_SYNTAX', `関数 ${name} の引数「${t}」を読めません。`, at);
+        params.push({ name: m[2], type: m[1] && /^s/i.test(m[1]) ? 'str' : m[1] && /^i/i.test(m[1]) ? 'int' : 'any', def: m[3]?.trim() });
+      }
+    }
+    this.spaces();
+    if (this.peek() !== '{') fail('E_SAKURA_SYNTAX', `関数 ${name} の本体 { … } がありません。`, at);
+    this.funcs.set(name, { name, params, body: this.braceChars() });
+  }
+
+  private callFunction(f: FuncDef, at: Pos): void {
+    this.blanks();
+    let args: SChar[][] = [];
+    if (this.peek() === '(') {
+      args = splitTop(this.parenChars(), ',').map(trimChars);
+      if (args.length === 1 && args[0].length === 0) args = [];
+    } else if (this.peek() === '=' && this.peek(1) !== '=') {
+      this.p++;
+      args = [trimChars(this.readExprChars())];
+      while (this.peek() === ',' && /[0-9A-Za-z_($+{-]/.test(this.peek(1))) {
+        this.p++;
+        args.push(trimChars(this.readExprChars()));
+      }
+    }
+    // arguments are evaluated in the caller's scope
+    const scope = new Map<string, Var>();
+    f.params.forEach((pm, i) => {
+      let a = args[i];
+      if (!a || a.length === 0) {
+        if (pm.def === undefined) {
+          scope.set(pm.name, pm.type === 'str' ? { t: 'str', chars: [] } : { t: 'int', v: 0 });
+          return;
+        }
+        a = charsOf(pm.def, at);
+      }
+      scope.set(pm.name, this.argValue(a, pm.type, `${f.name} の引数 ${pm.name}`, at));
+    });
+    if (++this.callDepth > MAX_CALL_DEPTH) fail('E_SAKURA_LIMIT', `関数の呼び出しが ${MAX_CALL_DEPTH} 段を超えました（再帰している可能性があります）。`, at);
+    this.scopes.push(scope);
+    try {
+      this.exec(f.body);
+    } catch (e) {
+      if (!(e instanceof ReturnSignal)) throw e;
+    } finally {
+      this.scopes.pop();
+      this.callDepth--;
+    }
+  }
+
+  private argValue(a: SChar[], type: Param['type'], what: string, at: Pos): Var {
+    if (isBraced(a)) return { t: 'str', chars: a.slice(1, -1) };
+    const text = textOf(a).trim();
+    if (/^[A-Za-z_]\w*$/.test(text)) {
+      const v = this.lookupVar(text);
+      if (v?.t === 'str' && type !== 'int') return v;
+    }
+    if (type === 'str') return { t: 'str', chars: a };
+    if (type === 'int') return { t: 'int', v: Math.trunc(this.evalNum(text, what, at)) };
+    // untyped: a number when it evaluates to one, otherwise the text itself
+    try {
+      const v = this.evalValue(text, what, at);
+      if (typeof v === 'number') return { t: 'int', v: Math.trunc(v) };
+    } catch (e) {
+      if (!(e instanceof DialectError)) throw e;
+    }
+    return { t: 'str', chars: a };
+  }
+
+  /** evaluates a condition; null when it cannot be decided at conversion time */
+  private condition(chars: SChar[], at: Pos): boolean | null {
+    try {
+      return truthy(this.evalValue(textOf(chars), '条件', at));
+    } catch (e) {
+      if (!(e instanceof DialectError)) throw e;
+      this.unsupported(`条件「${textOf(chars).trim()}」を変換時に決められないため、この If / For / While を実行しません。`, at);
+      return null;
+    }
+  }
+
+  private ifStatement(at: Pos): void {
+    const branches: Array<{ cond: SChar[] | null; body: SChar[] }> = [];
+    for (;;) {
+      this.blanks();
+      if (this.peek() !== '(') fail('E_SAKURA_SYNTAX', 'If の後に (条件) が必要です。', at);
+      const cond = this.parenChars();
+      this.spaces();
+      if (this.peek() !== '{') fail('E_SAKURA_SYNTAX', 'If (条件) の後に { … } が必要です。', at);
+      branches.push({ cond, body: this.braceChars() });
+      const save = this.p;
+      this.spaces();
+      const w = this.ident();
+      if (w === 'Else' || w === 'ELSE') {
+        this.spaces();
+        const save2 = this.p;
+        const w2 = this.ident();
+        if (w2 === 'If' || w2 === 'IF') continue;
+        this.p = save2;
+        if (this.peek() !== '{') fail('E_SAKURA_SYNTAX', 'Else の後に { … } が必要です。', at);
+        branches.push({ cond: null, body: this.braceChars() });
+      } else this.p = save;
+      break;
+    }
+    for (const b of branches) {
+      if (b.cond === null) {
+        this.exec(b.body);
+        return;
+      }
+      const ok = this.condition(b.cond, at);
+      if (ok === null) return; // undecidable: the whole If is skipped (best-effort)
+      if (ok) {
+        this.exec(b.body);
+        return;
+      }
+    }
+  }
+
+  /** For(init; cond; step){…} / While(cond){…} */
+  private forStatement(at: Pos, isWhile: boolean): void {
+    this.blanks();
+    if (this.peek() !== '(') fail('E_SAKURA_SYNTAX', `${isWhile ? 'While' : 'For'} の後に ( … ) が必要です。`, at);
+    const header = this.parenChars();
+    this.spaces();
+    if (this.peek() !== '{') fail('E_SAKURA_SYNTAX', `${isWhile ? 'While' : 'For'} ( … ) の後に { … } が必要です。`, at);
+    const body = this.braceChars();
+    let init: SChar[] = [];
+    let cond: SChar[];
+    let step: SChar[] = [];
+    if (isWhile) cond = header;
+    else {
+      const parts = splitTop(header, ';');
+      if (parts.length !== 3) fail('E_SAKURA_SYNTAX', 'For は For(初期化; 条件; 更新) の形で書いてください。', at);
+      [init, cond, step] = parts;
+    }
+    if (textOf(init).trim()) this.simpleStatement(textOf(init), at);
+    for (let n = 0; ; n++) {
+      if (n >= MAX_LOOP) fail('E_SAKURA_LIMIT', `繰り返しが ${MAX_LOOP} 回を超えました（無限ループの可能性があります）。`, at);
+      if (textOf(cond).trim()) {
+        const ok = this.condition(cond, at);
+        if (ok === null || !ok) return;
+      }
+      try {
+        this.exec(body);
+      } catch (e) {
+        if (e instanceof BreakSignal) return;
+        if (!(e instanceof ContinueSignal)) throw e;
+      }
+      if (textOf(step).trim()) this.simpleStatement(textOf(step), at);
+    }
+  }
+
+  /** `Int A=0`, `A=A+1`, `A++`, `A+=2` (For headers) */
+  private simpleStatement(text: string, at: Pos): void {
+    const t = text.trim();
+    let m = /^(?:(Int|INT)\s+)?([A-Za-z_]\w*)\s*(?:=\s*([\s\S]+))?$/.exec(t);
+    if (m && !(m[3] === undefined && !m[1])) {
+      const v = m[3] === undefined ? 0 : Math.trunc(this.evalNum(m[3], m[2], at));
+      this.setVar(m[2], { t: 'int', v }, !!m[1] || !this.lookupVar(m[2]));
+      return;
+    }
+    m = /^([A-Za-z_]\w*)\s*(\+\+|--)$/.exec(t) ?? /^(\+\+|--)\s*([A-Za-z_]\w*)$/.exec(t);
+    if (m) {
+      const name = m[1].startsWith('+') || m[1].startsWith('-') ? m[2] : m[1];
+      const op = m[1].startsWith('+') || m[1].startsWith('-') ? m[1] : m[2];
+      const cur = this.evalNum(name, name, at);
+      this.setVar(name, { t: 'int', v: cur + (op === '++' ? 1 : -1) }, false);
+      return;
+    }
+    m = /^([A-Za-z_]\w*)\s*([+\-*/])=\s*([\s\S]+)$/.exec(t);
+    if (m) {
+      this.setVar(m[1], { t: 'int', v: Math.trunc(this.evalNum(`(${m[1]})${m[2]}(${m[3]})`, m[1], at)) }, false);
+      return;
+    }
+    fail('E_SAKURA_SYNTAX', `「${t}」を読めません（For の初期化・更新に書けるのは Int A=0、A++、A+=1 などです）。`, at);
+  }
+
+  /** SysEx: only GS "Use for Rhythm Part" is used (the channel becomes a drum channel). */
+  private sysex(at: Pos): void {
+    this.blanks();
+    let raw: SChar[];
+    if (this.peek() === '(') raw = this.parenChars();
+    else {
+      if (this.peek() === '=') this.p++;
+      const start = this.p;
+      this.skipStatement();
+      raw = this.src.slice(start, this.p);
+    }
+    const items: SChar[][] = [];
+    for (const it of splitTop(raw, ',').map(trimChars)) {
+      if (isBraced(it)) items.push(...splitTop(it.slice(1, -1), ',').map(trimChars));
+      else items.push(it);
+    }
+    let bytes: number[];
+    try {
+      bytes = items.map((x) => this.evalNum(textOf(x), 'SysEx', at));
+    } catch (e) {
+      if (!(e instanceof DialectError)) throw e;
+      this.unsupported('SysEx の内容を変換時に求められないため、変換しません。', at);
+      return;
+    }
+    const [f0, maker, , model, cmd, a1, a2, a3, value] = bytes;
+    if (f0 === 0xf0 && maker === 0x41 && model === 0x42 && cmd === 0x12 && a1 === 0x40 && (a2 & 0xf0) === 0x10 && a3 === 0x15 && value !== undefined) {
+      const part = a2 & 0x0f;
+      const ch = part === 0 ? 10 : part <= 9 ? part : part + 1;
+      if (ch !== 10) {
+        if (value > 0) this.song.drumChannels.set(ch, at);
+        else this.song.drumChannels.delete(ch);
+      }
+      return;
+    }
+    this.unsupported('SysEx は変換しません（読み取るのは GS の Use for Rhythm Part だけです）。', at);
   }
 
   private keyflag(at: Pos): void {
@@ -1499,10 +2233,24 @@ interface Built {
   tracks: number;
 }
 
-function writeSong(song: Song, warn: Warnings): Built {
+function writeSong(song: Song, warn: Warnings, approximate: boolean): Built {
   const out: string[] = [];
   const title = song.meta.find((m) => m.kind === '曲名')?.text;
   out.push(`// picosakura から変換${title ? `: ${title.replace(/[\r\n]/g, ' ')}` : ''}`);
+  if (approximate) out.push('// 近似変換: 変換できない命令をスキップしています（元の曲と同じには鳴りません）。');
+
+  // GS rhythm parts (Use for Rhythm Part SysEx): played on the GM drum channel 10
+  for (const [ch, at] of song.drumChannels) {
+    let dropped = 0;
+    for (const v of song.vtracks) {
+      if (v.channel !== ch) continue;
+      v.channel = 10;
+      const before = v.items.length;
+      v.items = v.items.filter((it) => !(it.kind === 'control' && (it.control.kind === 'program' || (it.control.kind === 'cc' && (it.control.controller === 0 || it.control.controller === 32)))));
+      dropped += before - v.items.length;
+    }
+    warn.add('I_SAKURA_GS_RHYTHM', `GS の SysEx（Use for Rhythm Part）により、チャンネル ${ch} をドラムとしてチャンネル 10 にまとめました${dropped ? '（ドラムセットの指定は変換しません）' : ''}。`, at);
+  }
   for (const m of song.meta.filter((x) => x.kind !== '曲名')) out.push(`// ${m.kind}: ${m.text.replace(/[\r\n]/g, ' ')}`);
   out.push('// オクターブはサクラの o から 1 を引いています（サクラ o5c = MML Studio o4c = MIDI 60）。');
   out.push('// 行末の // の後の数字は元の行番号です。');
@@ -1693,23 +2441,24 @@ function preprocess(text: string, warn: Warnings): { chars: SChar[]; defs: Defs 
   chars = replaceJapanese(chars, warn);
   chars = expand(chars, defs, 0, warn);
   chars = expandRhythm(chars, defs);
-  chars = expandLoops(chars);
+  chars = expandLoops(chars, literalInts(chars));
   return { chars, defs };
 }
 
 export function listSakuraSongs(text: string): DialectSong[] {
-  const m = /TrackName\s*=?\s*\{\s*"([^"]*)"/.exec(text) ?? /曲名\s*\{\s*"([^"]*)"/.exec(text);
-  return text.trim() ? [{ index: 0, title: m?.[1], startLine: 1, parts: 0 }] : [];
+  const m = /(?:TrackName|曲名)\s*=?\s*\{\s*(?:"([^"]*)"|([^}"]*))\s*\}/.exec(text);
+  const title = (m?.[1] ?? m?.[2])?.trim();
+  return text.trim() ? [{ index: 0, title: title || undefined, startLine: 1, parts: 0 }] : [];
 }
 
-export function convertSakura(text: string): DialectConvertResult {
+export function convertSakura(text: string, options: { bestEffort?: boolean } = {}): DialectConvertResult {
   try {
     if (text.trim() === '') fail('E_SAKURA_NO_DATA', '変換する MML がありません。', { line: 1, column: 1 });
     const warn = new Warnings();
     const { chars, defs } = preprocess(text, warn);
-    const interp = new Interpreter(chars, warn, defs.meta);
+    const interp = new Interpreter(chars, warn, defs.meta, options.bestEffort ?? false);
     interp.run();
-    const built = writeSong(interp.song, warn);
+    const built = writeSong(interp.song, warn, interp.approximate);
     if (built.notes === 0) fail('E_SAKURA_NO_DATA', '演奏する音符がありません。', { line: 1, column: 1 });
     const compiled = compileMml(built.mml);
     if (!compiled.ok) {
@@ -1720,7 +2469,7 @@ export function convertSakura(text: string): DialectConvertResult {
     if (!report.ok) {
       return { ok: false, errors: [{ code: 'E_SAKURA_VERIFY', message: `変換結果を再コンパイルしたイベントが変換器の想定と一致しませんでした（${report.mismatches[0] ?? ''}）。`, line: 1, column: 1 }] };
     }
-    return { ok: true, mml: built.mml, warnings: warn.list(), summary: { dialect: 'sakura', parts: built.tracks, notes: built.notes, verified: true } };
+    return { ok: true, mml: built.mml, warnings: warn.list(), summary: { dialect: 'sakura', parts: built.tracks, notes: built.notes, verified: true, approximate: interp.approximate } };
   } catch (e) {
     if (e instanceof DialectError) return { ok: false, errors: [e.issue] };
     throw e;

@@ -3,7 +3,7 @@ import { utf8Length } from '../source';
 import { LIMITS } from '../types';
 import { convertPc98Play, listPc98Songs } from './pc98-play';
 import { convertSakura, listSakuraSongs } from './sakura';
-import type { DialectConvertResult, DialectId, DialectSong } from './types';
+import type { DialectConvertResult, DialectId, DialectOptions, DialectSong } from './types';
 
 export * from './types';
 export { FM_VOICES, SSG_DEFAULT_GM, type FmVoice } from './fm-voices';
@@ -22,7 +22,7 @@ export function listDialectSongs(text: string, dialect: DialectId): DialectSong[
   }
 }
 
-export function convertDialect(text: string, dialect: DialectId, options: { songIndex?: number } = {}): DialectConvertResult {
+export function convertDialect(text: string, dialect: DialectId, options: DialectOptions = {}): DialectConvertResult {
   if (utf8Length(text) > LIMITS.maxSourceBytes) {
     return { ok: false, errors: [{ code: 'E_DIALECT_TOO_LARGE', message: `入力が大きすぎます（上限 ${LIMITS.maxSourceBytes / 1024 / 1024} MiB）。`, line: 1, column: 1 }] };
   }
@@ -32,7 +32,7 @@ export function convertDialect(text: string, dialect: DialectId, options: { song
       result = convertPc98Play(text, options.songIndex ?? 0);
       break;
     case 'sakura':
-      result = convertSakura(text);
+      result = convertSakura(text, { bestEffort: options.bestEffort });
       break;
   }
   if (result.ok && utf8Length(result.mml) > LIMITS.maxSourceBytes) {

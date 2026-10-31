@@ -150,10 +150,17 @@ describe('picosakura acceptance L62–L79', () => {
     expect(mml).toContain('picosakura から変換: ドレミの歌');
   });
 
-  it('L78 programming features are rejected with a position and the MIDI hint', () => {
-    for (const t of ['Int I=3+1 c', 'For(Int I=0; I<3; I++){ c }', 'Play(A)', 'Int X=Random(1,6)', 'Include(x.h)', 'IF(1){c}']) {
+  it('L78 features that cannot be decided at conversion time are rejected with a position and the MIDI hint (strict mode)', () => {
+    for (const [t, code] of [
+      ['Play(A)', 'E_SAKURA_UNSUPPORTED'],
+      ['Int X=Random(1,6)', 'E_SAKURA_EXPR'],
+      ['Include(x.h)', 'E_SAKURA_UNSUPPORTED'],
+      ['If(MODE==1){c}', 'E_SAKURA_UNSUPPORTED'],
+      ['SysEx=$F0,$43,$10,$4C,$00,$00,$7E,$00,$F7', 'E_SAKURA_UNSUPPORTED'],
+      ['Array A=(1,2) c', 'E_SAKURA_UNSUPPORTED'],
+    ]) {
       const e = err(t);
-      expect(e?.code, t).toBe('E_SAKURA_UNSUPPORTED');
+      expect(e?.code, t).toBe(code);
       expect(e?.message).toContain('MIDI');
       expect(e?.line).toBe(1);
     }
@@ -238,5 +245,125 @@ TR 2
     expect(guessDialect('10 "CDE"')).toBe('pc98-play');
     expect(guessDialect('Tempo=102\nTR(1) Time(1:1:0); @47 cde')).toBe('sakura');
     expect(guessDialect('TR(1) CH(1) @1 o4 cde')).toBeNull(); // MML Studio itself
+  });
+});
+
+// SPEC 4.5.12: Sakura programs (Int / Str / Function / If / For / While and expressions), best-effort mode.
+const best = (text: string) => {
+  const r = convertDialect(text, 'sakura', { bestEffort: true });
+  if (!r.ok) throw new Error(r.errors.map((e) => `${e.line}:${e.column} ${e.code} ${e.message}`).join('\n'));
+  const c = compileMml(r.mml);
+  if (!c.ok) throw new Error(`recompile failed\n${r.mml}`);
+  return { r, song: c.song, mml: r.mml };
+};
+
+describe('picosakura programs L80–L89', () => {
+  it('L80 Int expressions and assignments; `=` arguments stop before the following MML', () => {
+    expect(pitches('Int A=3+1 Int B=A*2-1 Key=B c')).toEqual([67]);
+    expect(pitches('Int A=1 A=A+2 A++ A+=1 Key=A c')).toEqual([65]);
+    expect(pitches('Int K=2 Key=K+1c d')).toEqual([63, 65]);
+    expect(notes(conv('Int BGN=3 Time(BGN:1:0) c').song)[0].startTick).toBe(3840);
+    expect(pitches('Int H=$10+2 Key=H-18 c')).toEqual([60]);
+  });
+
+  it('L81 Function with untyped, Int, Str and default parameters; `F=x` and `F` calls', () => {
+    const fn = 'Function DL(ti){Time(ti:1:0)} Function HAM(STR SA){Sub{Key=12 SA;Key=0}SA} Function V2(FF=90){v(FF)} ';
+    const n = notes(conv(fn + 'DL=2 V2 HAM({c}) DL(3) V2=50 d').song);
+    expect(n.map((x) => [x.pitch, x.startTick, x.velocity])).toEqual([
+      [60, 1920, 90],
+      [72, 1920, 90],
+      [62, 3840, 50],
+    ]);
+  });
+
+  it('L82 If / Else / Else If with the current channel; undecidable conditions', () => {
+    const s = 'Str X={If(CH==2){c}Else If(CH==3){d}Else{e}} TR(1) X TR(2) X TR(3) X';
+    expect(notes(conv(s).song).map((n) => [n.channel, n.pitch])).toEqual([
+      [0, 64],
+      [1, 60],
+      [2, 62],
+    ]);
+    expect(err('If(MODE1==GS){c}')?.code).toBe('E_SAKURA_UNSUPPORTED');
+    const b = best('If(MODE1==GS){c}Else{d} e');
+    expect(notes(b.song).map((n) => n.pitch)).toEqual([64]);
+    expect(b.r.ok && b.r.warnings.map((w) => w.code)).toContain('W_SAKURA_APPROX');
+  });
+
+  it('L83 For / While with Break and a loop variable used in commands', () => {
+    const n = notes(conv('l8 For(Int A=0;A<3;A++){q=(50+A*20) c}').song);
+    expect(n.map((x) => x.gateTicks)).toEqual([120, 168, 216]);
+    expect(pitches('Int I=0 While(I<10){I++ If(I==3){Break} c}')).toEqual([60, 60]);
+    expect(pitches('FOR(INT B;B<2;B++){d}')).toEqual([62, 62]);
+  });
+
+  it('L84 Str inside chords, loop separators, `[N ...]` with an Int constant', () => {
+    expect(pitches("Str OA={n27n35} Str O1={'OA'} TR(10) [2O1;r]")).toEqual([27, 35, 27, 35]);
+    expect(pitches('Str A={c} [2A]')).toEqual([60, 60]);
+    expect(pitches('Int N=3 [N c]')).toEqual([60, 60, 60]);
+  });
+
+  it("L85 `@(n,msb,lsb)` with expressions, `MML(v)`, `v=(...)`, `p%=-100`", () => {
+    const ev = conv('Function W(X3,XA){@(X3,XA,0)} W(12,1) v=(100-20) Int T=MML(v) v(T+10) c p%=-100').song.tracks[0].events;
+    expect(ev.find((e) => e.kind === 'program')).toMatchObject({ program: 11 });
+    expect(ev.filter((e): e is ControlEvent => e.kind === 'cc').map((e) => [e.controller, e.value])).toEqual([
+      [0, 1],
+      [32, 0],
+    ]);
+    expect(ev.find((e): e is NoteEvent => e.kind === 'note')?.velocity).toBe(90);
+    expect(ev.find((e): e is PitchBendEvent => e.kind === 'pitchbend')?.value).toBe(-100);
+  });
+
+  it('L86 `&&` is converted like `&`; a bare `^` lengthens the previous note', () => {
+    const n = notes(conv('l8 c&&^d g ^').song);
+    expect(n.map((x) => [x.pitch, x.durationTicks])).toEqual([
+      [60, 480],
+      [62, 240],
+      [67, 480],
+    ]);
+  });
+
+  it('L87 GS "Use for Rhythm Part" SysEx moves the channel to the drum channel 10', () => {
+    const { r, song } = conv('TR(11) CH(11) SysEx=$F0,$41,$10,$42,$12,{$40,$1A,$15,$01},$F7; @26 n36 n38');
+    expect(song.tracks.map((t) => t.channel)).toEqual([9]);
+    expect(notes(song).map((n) => n.pitch)).toEqual([36, 38]);
+    expect(r.ok && r.warnings.map((w) => w.code)).toContain('I_SAKURA_GS_RHYTHM');
+  });
+
+  it('L88 best-effort: Include, unknown functions and SysEx are skipped with warnings; strict mode stops', () => {
+    const t = 'Include(delay.h) MidiDelay({c d},8,!2) Foo(1) SysEx=$F0,$7E,$7F,$09,$01,$F7; e';
+    expect(convertDialect(t, 'sakura').ok).toBe(false);
+    const { r, song, mml } = best(t);
+    expect(notes(song).map((n) => n.pitch)).toEqual([60, 62, 64]);
+    expect(r.ok && r.summary.approximate).toBe(true);
+    expect(mml).toContain('近似変換');
+    const msgs = r.ok ? r.warnings.filter((w) => w.code === 'W_SAKURA_APPROX').map((w) => w.message) : [];
+    expect(msgs.some((m) => m.includes('Include'))).toBe(true);
+    expect(msgs.some((m) => m.includes('MidiDelay'))).toBe(true);
+    expect(msgs.some((m) => m.includes('Foo'))).toBe(true);
+    expect(msgs.some((m) => m.includes('SysEx'))).toBe(true);
+    // a fully convertible text is not marked approximate
+    expect(best('c d e').r.ok && best('c d e').r.summary.approximate).toBe(false);
+  });
+
+  it('L89 a program-style piece (functions setting up tracks, Time via a function, If on CH) recompiles and matches', () => {
+    const { r, song } = best(`INT EST=150 TrackName={テスト曲 ゛} System.MeasureShift=2 Tempo=1000 ResetGS;
+FUNCTION WIN(X1,X2,X3,X8){TR=X1;DL(0)CH=X2;@(X3,0,0)v=(X8)q=(90)}
+FUNCTION DL(ti){Time(ti:1:0)} INT K=0 DL=0 Tempo=EST;
+FUNCTION HAM2(STR SA){Sub{Key=-12SA;Key=0}SA}
+WIN(01,01,012,127)WIN(02,02,082,100)WIN(10,10,001,127)
+INT BGN=2
+STR MN={l8[2cdef]} STR RT={If(CH==2){[4'ceg']}Else{[4c]}}
+STR OA={n36n42} STR O1={'OA'}
+TR=1 HAM2({DL=BGN MN}) TR=2 DL=BGN RT TR=10 l16 DL=BGN [8O1;r]`);
+    expect(r.ok && r.summary.verified).toBe(true);
+    expect(song.tempoMap.map((t) => [t.tick, t.microsecondsPerQuarter])).toEqual([
+      [0, 60000],
+      [1920, 400000],
+    ]);
+    // DL=0 is measure 2 (MeasureShift 2); DL=BGN (2) is measure 4 = tick 5760
+    expect(Math.min(...notes(song).map((n) => n.startTick))).toBe(5760);
+    expect(notes(song).filter((n) => n.channel === 0)).toHaveLength(16);
+    expect(notes(song).filter((n) => n.channel === 1)).toHaveLength(12);
+    expect(notes(song).filter((n) => n.channel === 9)).toHaveLength(16);
   });
 });
