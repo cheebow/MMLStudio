@@ -9,6 +9,7 @@ import { LicenseDialog } from './ui/LicenseDialog';
 import { MenuBar, type Menu } from './ui/MenuBar';
 import { MidiImportPanel, type MidiDocument, type PlaySource } from './ui/MidiImportPanel';
 import { MmlEditor, type MmlEditorHandle } from './ui/MmlEditor';
+import { EMPTY_MIX, silencedChannels, toggleMute, toggleSolo, type Mix } from './ui/mix';
 import { PlaybackPanel } from './ui/PlaybackPanel';
 import { rollFromMidi, rollFromSong } from './ui/roll-data';
 import { SoundFontSelector } from './ui/SoundFontSelector';
@@ -72,6 +73,13 @@ export default function App() {
   const [dialog, setDialog] = useState<DialogName>(null);
   const [rollOpen, setRollOpen] = useState(() => readPref('mmlstudio.roll.open', '1') === '1');
   const [rollHeight, setRollHeight] = useState(() => Math.min(600, Math.max(100, Number(readPref('mmlstudio.roll.height', '200')) || 200)));
+  /** player mode (SPEC 6.4): the editor and the side pane are hidden, the playback view fills the window */
+  const [playerMode, setPlayerMode] = useState(() => readPref('mmlstudio.playerMode', '0') === '1');
+  /** read after awaits (a MIDI conversion), where the rendered value may be stale */
+  const playerModeRef = useRef(playerMode);
+  /** set when a MIDI was opened in player mode: start playing once it is the playback source */
+  const autoPlayRef = useRef(false);
+  const [mix, setMix] = useState<Mix>(EMPTY_MIX);
   const player = usePlayer();
 
   // Background compile for diagnostics / track list only. Playback recompiles on "play".
@@ -125,6 +133,18 @@ export default function App() {
   const midiRoll = useMemo(() => (midiDoc ? rollFromMidi(midiDoc.bytes) : null), [midiDoc]);
   const songRoll = useMemo(() => (lastGood ? rollFromSong(lastGood) : null), [lastGood]);
   const rollData = playingOriginal ? midiRoll : songRoll;
+
+  // Mute / solo: silence the channels of the tracks shown (SPEC 6.4).
+  const silenced = useMemo(() => silencedChannels(rollData?.tracks ?? [], mix), [rollData, mix]);
+  const { setSilencedChannels } = player;
+  useEffect(() => setSilencedChannels(silenced), [silenced, setSilencedChannels]);
+  const mixActive = mix.muted.size > 0 || mix.soloed.size > 0;
+
+  const togglePlayerMode = (on: boolean) => {
+    setPlayerMode(on);
+    playerModeRef.current = on;
+    writePref('mmlstudio.playerMode', on ? '1' : '0');
+  };
   const toggleRoll = (open: boolean) => {
     setRollOpen(open);
     writePref('mmlstudio.roll.open', open ? '1' : '0');
@@ -225,7 +245,8 @@ export default function App() {
         setBackup({ text: editorRef.current?.getValue() ?? source, fileName, kind: 'convert' });
         replaceDocument(r.mml, `${baseName(name)}.mml`);
         setMidiDoc({ fileName: name, bytes, options, summary: r.summary, issues: [], generatedMml: r.mml });
-        setPlaySource('mml');
+        // In player mode a MIDI file is played as it is.
+        setPlaySource(playerModeRef.current ? 'original' : 'mml');
         const lost = Object.values(r.summary.lostEvents).reduce((a, b) => a + b, 0);
         setNotice(
           `「${name}」を MML に変換しました（${r.summary.mode === 'fidelity' ? '忠実度優先' : '読みやすさ優先'}・再コンパイル検証 一致）。${lost > 0 ? `変換できなかったイベントが ${lost} 個あります（インポート情報を参照）。` : ''}`,
@@ -256,7 +277,18 @@ export default function App() {
     if (!confirmDiscard(`「${file.name}」`)) return;
     const bytes = new Uint8Array(await file.arrayBuffer());
     await convertMidi(file.name, bytes, { mode: midiDoc?.options.mode ?? 'fidelity', quantize: midiDoc?.options.quantize });
+    // Starting audio needs a user gesture; a drop is not one, so only start when audio is already unlocked.
+    autoPlayRef.current = playerModeRef.current && player.canStartWithoutGesture();
   };
+
+  // Runs after the render that has the new MIDI document, so handlePlay sees the fresh state.
+  useEffect(() => {
+    if (!autoPlayRef.current || player.state === 'loading-soundfont' || player.state === 'compiling' || player.state === 'playing') return;
+    autoPlayRef.current = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- starts playback (an external system) once the new document is rendered
+    if (playingOriginal) handlePlay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [midiDoc, player.state, playingOriginal]);
 
   const reconvert = (options: MidiImportOptions) => {
     if (!midiDoc) return;
@@ -344,6 +376,17 @@ export default function App() {
       ],
     },
     {
+      label: '表示',
+      items: [
+        playerMode
+          ? { label: 'エディタに戻る', onSelect: () => togglePlayerMode(false) }
+          : { label: 'プレーヤーモード', onSelect: () => togglePlayerMode(true), title: 'エディタを隠し、演奏表示を大きく表示します' },
+        { label: '演奏表示を閉じる', onSelect: () => toggleRoll(false), disabled: playerMode || !rollOpen },
+        { label: '演奏表示を開く', onSelect: () => toggleRoll(true), disabled: playerMode || rollOpen },
+        { label: 'ミュート・ソロを解除', onSelect: () => setMix(EMPTY_MIX), disabled: !mixActive, separatorBefore: true },
+      ],
+    },
+    {
       label: '変換',
       items: [{ label: '他の MML から変換…', onSelect: () => setDialog('dialect'), title: 'PC-9801 / PC-8801 / MSX の PLAY 文、picosakura（サクラ MML）' }],
     },
@@ -360,7 +403,7 @@ export default function App() {
 
   return (
     <div
-      className={`app${dragging ? ' dragging' : ''}`}
+      className={`app${dragging ? ' dragging' : ''}${playerMode ? ' player-mode' : ''}`}
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();
@@ -414,18 +457,27 @@ export default function App() {
           }}
         />
         <span className="doc-name" data-testid="doc-name">
-          {fileName ?? '無題'}
-          {dirty ? ' ●' : ''}
-          {dirty && <span className="visually-hidden">（未保存の変更あり）</span>}
+          {playerMode && midiDoc ? midiDoc.fileName : (fileName ?? '無題')}
+          {dirty && !(playerMode && midiDoc) ? ' ●' : ''}
+          {dirty && !(playerMode && midiDoc) && <span className="visually-hidden">（未保存の変更あり）</span>}
         </span>
+        <button
+          type="button"
+          className="small-btn mode-btn"
+          aria-pressed={playerMode}
+          title={playerMode ? 'エディタとサイドパネルを表示します' : 'エディタを隠し、演奏表示を大きく表示します（MIDI をドロップすると元 MIDI をそのまま再生）'}
+          onClick={() => togglePlayerMode(!playerMode)}
+        >
+          {playerMode ? '✎ エディタに戻る' : '▶ プレーヤーモード'}
+        </button>
       </header>
 
       <main className="workspace">
         <div className="editor-pane">
           <MmlEditor ref={editorRef} initialValue={initial.source} diagnostics={diagnostics} onChange={onChange} />
-          {rollOpen ? (
-            <div className="roll-panel" style={{ height: rollHeight }}>
-              <div
+          {rollOpen || playerMode ? (
+            <div className="roll-panel" data-testid="roll-panel" data-silenced={silenced.join(',')} style={playerMode ? undefined : { height: rollHeight }}>
+              {!playerMode && <div
                 className="roll-resize"
                 role="separator"
                 aria-orientation="horizontal"
@@ -440,7 +492,7 @@ export default function App() {
                   setRollHeight(h);
                   writePref('mmlstudio.roll.height', String(h));
                 }}
-              />
+              />}
               <PlaybackPanel
                 data={rollData}
                 time={player.currentTime}
@@ -449,7 +501,10 @@ export default function App() {
                 onSeek={player.seek}
                 onJump={(span) => editorRef.current?.jumpTo(span.startOffset, span.endOffset)}
                 sourceLabel={playingOriginal ? `元 MIDI（${midiDoc.fileName}）` : hasErrors ? 'MML（最後に成功したコンパイル結果）' : 'MML'}
-                onClose={() => toggleRoll(false)}
+                mix={mix}
+                onToggleMute={(label) => setMix((m) => toggleMute(m, label))}
+                onToggleSolo={(label) => setMix((m) => toggleSolo(m, label))}
+                onClose={playerMode ? undefined : () => toggleRoll(false)}
               />
             </div>
           ) : (
@@ -457,6 +512,7 @@ export default function App() {
               <button type="button" className="link-btn roll-toggle" aria-expanded="false" onClick={() => toggleRoll(true)}>
                 ▸ 演奏表示（ピアノロール・チャンネル）
               </button>
+              {mixActive && <span className="muted small"> ミュート／ソロ中</span>}
             </div>
           )}
         </div>
@@ -497,6 +553,17 @@ export default function App() {
           onStop={player.stop}
           onSeek={player.seek}
         />
+        {playerMode && midiDoc && (
+          <span className="player-source" role="radiogroup" aria-label="再生するもの">
+            <label>
+              <input type="radio" name="player-source" checked={playSource === 'original'} onChange={() => changePlaySource('original')} /> 元 MIDI
+            </label>
+            <label>
+              <input type="radio" name="player-source" checked={playSource === 'mml'} disabled={!midiDoc.generatedMml} onChange={() => changePlaySource('mml')} /> 変換した MML
+            </label>
+          </span>
+        )}
+        {playerMode && !midiDoc && <span className="muted small">MIDI ファイル（.mid）をドロップするか「ファイル」→「MIDIを開く…」で開きます。</span>}
         <div className="messages" aria-live="polite">
           {player.soundFont.status === 'loading' && (
             <span>

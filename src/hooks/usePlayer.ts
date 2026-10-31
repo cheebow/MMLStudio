@@ -31,6 +31,10 @@ export interface Player {
   pause: () => void;
   stop: () => void;
   seek: (seconds: number) => void;
+  /** Silences MIDI channels 0..15 (mute / solo). Applies immediately and to later songs. */
+  setSilencedChannels: (channels: readonly number[]) => void;
+  /** true when playback can start without a user gesture (audio already unlocked by an earlier play) */
+  canStartWithoutGesture: () => boolean;
   /** Must be called from a user gesture (file picker / click). */
   selectSoundFont: (choice: SoundFontChoice) => Promise<void>;
 }
@@ -201,6 +205,9 @@ export function usePlayer(): Player {
     [adapter, startSoundFontLoad],
   );
 
+  const setSilencedChannels = useCallback((channels: readonly number[]) => adapter().setSilencedChannels(channels), [adapter]);
+  const canStartWithoutGesture = useCallback(() => adapterRef.current?.isUnlocked ?? false, []);
+
   // UI-only clock: reads the sequencer time; never schedules notes.
   useEffect(() => {
     if (state !== 'playing') return;
@@ -228,5 +235,5 @@ export function usePlayer(): Player {
     };
   }, []);
 
-  return { state, error, soundFont, currentTime, duration, play, pause, stop, seek, selectSoundFont };
+  return { state, error, soundFont, currentTime, duration, play, pause, stop, seek, setSilencedChannels, canStartWithoutGesture, selectSoundFont };
 }

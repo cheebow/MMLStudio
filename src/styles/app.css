@@ -194,3 +194,21 @@ button, select, input { font: inherit; color: inherit; }
 .menu-item[aria-disabled='true'] { color: var(--muted); cursor: default; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 .app-header .doc-name { margin-left: auto; }
+
+/* Mute / solo and player mode (SPEC 6.4) */
+.roll-track { display: inline-flex; align-items: center; gap: 1px; }
+.roll-track.silenced .roll-chip { opacity: 0.45; }
+.mix-btn { border: 1px solid var(--border); border-radius: 3px; background: none; color: var(--muted); font: inherit; font-size: 10px; font-weight: 600; line-height: 14px; padding: 0 3px; cursor: pointer; }
+.mix-btn:hover { color: var(--text); }
+.mix-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.mix-btn.mute[aria-pressed='true'] { background: var(--error, #c0362c); border-color: var(--error, #c0362c); color: #fff; }
+.mix-btn.solo[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.mode-btn { white-space: nowrap; }
+.mode-btn[aria-pressed='true'] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.player-mode .workspace { grid-template-columns: minmax(0, 1fr); }
+.player-mode .side-pane { display: none; }
+.player-mode .editor-pane { border-right: none; }
+.player-mode .editor-pane .editor-host { display: none; }
+.player-mode .roll-panel { flex: 1; min-height: 0; border-top: none; }
+.player-source { display: inline-flex; gap: 12px; font-size: 13px; align-items: center; }
+@media (max-width: 800px) { .player-mode .editor-pane { height: 75vh; } }

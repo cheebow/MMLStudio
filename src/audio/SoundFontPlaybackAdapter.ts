@@ -78,6 +78,8 @@ export class SoundFontPlaybackAdapter {
   private loadGeneration = 0;
   /** AudioContext created synchronously inside a user gesture (see unlock()). */
   private pendingContext: AudioContext | null = null;
+  /** MIDI channels (0..15) the user silenced (mute / solo); re-applied after every song load */
+  private silenced: ReadonlySet<number> = new Set();
 
   constructor(private readonly workletUrl: string) {}
 
@@ -139,6 +141,9 @@ export class SoundFontPlaybackAdapter {
     }
     const sequencer = new lib.Sequencer(synth, { skipToFirstNoteOn: false });
     this.engine = { context, synth, sequencer };
+    // channels added for multi-port MIDI start unmuted
+    synth.eventHandler.addEvent('channelAdded', 'mml-studio-mute', () => this.applyMutes());
+    this.applyMutes();
     return this.engine;
   }
 
@@ -183,7 +188,22 @@ export class SoundFontPlaybackAdapter {
     sequencer.loadNewSongList([{ binary, fileName }]);
     await withTimeout(done, TIMEOUTS.songMs, () => new PlaybackError('midi-load', 'MIDI の読み込みが時間内に終わりませんでした。'));
     if (generation !== this.loadGeneration) return null;
+    this.applyMutes();
     return { duration: sequencer.duration };
+  }
+
+  /** Silences MIDI channels (mute / solo). Channels of other ports (16+) follow channel % 16. */
+  setSilencedChannels(channels: readonly number[]): void {
+    this.silenced = new Set(channels);
+    this.applyMutes();
+  }
+
+  private applyMutes(): void {
+    if (!this.engine) return;
+    this.engine.synth.midiChannels.forEach((ch, i) => {
+      const muted = this.silenced.has(i % 16);
+      if (ch.systemParameters.isMuted !== muted) ch.setSystemParameter('isMuted', muted);
+    });
   }
 
   play(): void {
@@ -221,6 +241,11 @@ export class SoundFontPlaybackAdapter {
 
   get isFinished(): boolean {
     return this.engine?.sequencer.isFinished ?? false;
+  }
+
+  /** true when audio can start without a fresh user gesture (the context is already running) */
+  get isUnlocked(): boolean {
+    return this.engine?.context.state === 'running';
   }
 
   get audioContextState(): AudioContextState | 'none' {

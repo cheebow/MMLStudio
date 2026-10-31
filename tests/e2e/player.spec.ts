@@ -114,20 +114,20 @@ test('track show / hide in the legend, and the channel view', async ({ page }) =
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.insertText('TR(1) CH(1) @41 l1 CC(7,90) c\nTR(2) CH(2) l1 o3 e\nTR(3) CH(10) l1 n36');
   const roll = page.getByTestId('piano-roll');
-  const legend = page.getByRole('group', { name: /トラックの表示/ });
-  await expect(legend.getByRole('button')).toHaveText(['TR1', 'TR2', 'TR3']);
+  const legend = page.getByRole('group', { name: /^トラック/ });
+  await expect(legend.locator('.roll-chip')).toHaveText(['TR1', 'TR2', 'TR3']);
 
   await page.getByRole('button', { name: '再生', exact: true }).click();
   await expect(page.getByTestId('player-state')).toHaveAttribute('data-state', 'playing', { timeout: 30_000 });
   await expect(roll).toHaveAttribute('data-active', '36,52,60');
   // hide TR2
-  await legend.getByRole('button', { name: 'TR2' }).click();
-  await expect(legend.getByRole('button', { name: 'TR2' })).toHaveAttribute('aria-pressed', 'false');
+  await legend.getByRole('button', { name: 'TR2', exact: true }).click();
+  await expect(legend.getByRole('button', { name: 'TR2', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await expect(roll).toHaveAttribute('data-active', '36,60');
   // solo TR1, then show all again
-  await legend.getByRole('button', { name: 'TR1' }).click({ modifiers: ['Shift'] });
+  await legend.getByRole('button', { name: 'TR1', exact: true }).click({ modifiers: ['Shift'] });
   await expect(roll).toHaveAttribute('data-active', '60');
-  await legend.getByRole('button', { name: 'TR1' }).click({ modifiers: ['Shift'] });
+  await legend.getByRole('button', { name: 'TR1', exact: true }).click({ modifiers: ['Shift'] });
   await expect(roll).toHaveAttribute('data-active', '36,52,60');
 
   // channel view: every track has a row; the sounding keys per track

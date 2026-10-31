@@ -59,6 +59,8 @@ test('header menus work with the keyboard', async ({ page }) => {
   await expect(page.getByRole('menuitem', { name: 'MMLを開く…' })).toBeFocused();
   // → moves to the next menu
   await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('menuitem', { name: 'プレーヤーモード' })).toBeFocused();
+  await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('menuitem', { name: '他の MML から変換…' })).toBeFocused();
   // Esc closes and returns focus to the menu button
   await page.keyboard.press('Escape');

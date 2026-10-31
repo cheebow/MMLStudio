@@ -2,6 +2,7 @@ import { useMemo, useState, type MouseEvent } from 'react';
 import type { SourceSpan } from '../engine';
 import { ChannelMonitor } from './ChannelMonitor';
 import { MAX_PPS, MIN_PPS, PianoRoll } from './PianoRoll';
+import { isSilenced, type Mix } from './mix';
 import type { RollData } from './roll-data';
 import { laneColor, prefersDark } from './viz-colors';
 
@@ -16,7 +17,12 @@ interface Props {
   onJump(span: SourceSpan): void;
   /** what is shown (MML / original MIDI) */
   sourceLabel: string;
-  onClose(): void;
+  /** mute / solo of the audio (by track label) */
+  mix: Mix;
+  onToggleMute(label: string): void;
+  onToggleSolo(label: string): void;
+  /** closes the panel; omitted in player mode (the panel is always shown) */
+  onClose?: () => void;
 }
 
 function readView(): View {
@@ -29,9 +35,9 @@ function readView(): View {
 
 /**
  * The playback view below the editor (SPEC 6.3): piano roll or channel monitor, with a legend
- * whose buttons show / hide tracks. Display only; the audio is not changed.
+ * whose buttons show / hide tracks (display only) and M / S buttons that mute / solo the audio (SPEC 6.4).
  */
-export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, sourceLabel, onClose }: Props) {
+export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, sourceLabel, mix, onToggleMute, onToggleSolo, onClose }: Props) {
   const [view, setView] = useState<View>(readView);
   const [pps, setPps] = useState(80);
   /** hidden tracks by label, so the choice survives recompiles */
@@ -66,9 +72,11 @@ export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, so
   return (
     <div className="roll">
       <div className="roll-bar">
-        <button type="button" className="link-btn roll-toggle" aria-expanded="true" aria-label="演奏表示を閉じる" title="演奏表示を閉じる" onClick={onClose}>
-          ▾
-        </button>
+        {onClose && (
+          <button type="button" className="link-btn roll-toggle" aria-expanded="true" aria-label="演奏表示を閉じる" title="演奏表示を閉じる" onClick={onClose}>
+            ▾
+          </button>
+        )}
         <span className="viz-tabs" role="tablist" aria-label="表示の種類">
           <button type="button" role="tab" aria-selected={view === 'roll'} className="viz-tab" onClick={() => choose('roll')}>
             ピアノロール
@@ -78,19 +86,40 @@ export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, so
           </button>
         </span>
         <span className="muted small">{sourceLabel}</span>
-        <span className="roll-legend" role="group" aria-label="トラックの表示（クリックで表示・非表示、Shift＋クリックでそのトラックだけ表示）">
+        <span className="roll-legend" role="group" aria-label="トラック（名前のクリックで表示・非表示、Shift＋クリックでそのトラックだけ表示。M でミュート、S でソロ）">
           {data?.tracks.map((t, i) => (
-            <button
-              key={`${t.label}-${i}`}
-              type="button"
-              className="roll-chip"
-              aria-pressed={!hidden.has(i)}
-              title={`${t.label} の表示を切り替え（Shift＋クリックでこのトラックだけ表示）`}
-              onClick={(e) => toggle(e, t.label)}
-            >
-              <span className="roll-swatch" style={{ background: laneColor(i, t.drum, dark) }} />
-              {t.label}
-            </button>
+            <span key={`${t.label}-${i}`} className={`roll-track${isSilenced(mix, t.label) ? ' silenced' : ''}`}>
+              <button
+                type="button"
+                className="roll-chip"
+                aria-pressed={!hidden.has(i)}
+                title={`${t.label} の表示を切り替え（Shift＋クリックでこのトラックだけ表示）`}
+                onClick={(e) => toggle(e, t.label)}
+              >
+                <span className="roll-swatch" style={{ background: laneColor(i, t.drum, dark) }} />
+                {t.label}
+              </button>
+              <button
+                type="button"
+                className="mix-btn mute"
+                aria-pressed={mix.muted.has(t.label)}
+                aria-label={`${t.label} をミュート`}
+                title={`${t.label} の音を消す（もう一度で戻す）`}
+                onClick={() => onToggleMute(t.label)}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                className="mix-btn solo"
+                aria-pressed={mix.soloed.has(t.label)}
+                aria-label={`${t.label} をソロ`}
+                title={`${t.label} をソロ（ソロのトラックだけ鳴らす。複数選べます）`}
+                onClick={() => onToggleSolo(t.label)}
+              >
+                S
+              </button>
+            </span>
           ))}
         </span>
         {view === 'roll' && (
