@@ -6,8 +6,11 @@ import { DiagnosticsPanel } from './ui/DiagnosticsPanel';
 import { HelpDialog } from './ui/HelpDialog';
 import { InstrumentDialog } from './ui/InstrumentDialog';
 import { LicenseDialog } from './ui/LicenseDialog';
+import { MenuBar, type Menu } from './ui/MenuBar';
 import { MidiImportPanel, type MidiDocument, type PlaySource } from './ui/MidiImportPanel';
 import { MmlEditor, type MmlEditorHandle } from './ui/MmlEditor';
+import { PlaybackPanel } from './ui/PlaybackPanel';
+import { rollFromMidi, rollFromSong } from './ui/roll-data';
 import { SoundFontSelector } from './ui/SoundFontSelector';
 import { TrackList } from './ui/TrackList';
 import { TransportBar } from './ui/TransportBar';
@@ -67,6 +70,8 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(initial.restored ? '前回の下書きを復元しました。' : null);
   const [dirty, setDirty] = useState(initial.restored);
   const [dialog, setDialog] = useState<DialogName>(null);
+  const [rollOpen, setRollOpen] = useState(() => readPref('mmlstudio.roll.open', '1') === '1');
+  const [rollHeight, setRollHeight] = useState(() => Math.min(600, Math.max(100, Number(readPref('mmlstudio.roll.height', '200')) || 200)));
   const player = usePlayer();
 
   // Background compile for diagnostics / track list only. Playback recompiles on "play".
@@ -115,6 +120,33 @@ export default function App() {
   useEffect(() => () => importJob.current?.cancel(), []);
 
   const playingOriginal = playSource === 'original' && midiDoc !== null;
+
+  // Piano roll data: the last good compile, or the original MIDI while it is the playback source.
+  const midiRoll = useMemo(() => (midiDoc ? rollFromMidi(midiDoc.bytes) : null), [midiDoc]);
+  const songRoll = useMemo(() => (lastGood ? rollFromSong(lastGood) : null), [lastGood]);
+  const rollData = playingOriginal ? midiRoll : songRoll;
+  const toggleRoll = (open: boolean) => {
+    setRollOpen(open);
+    writePref('mmlstudio.roll.open', open ? '1' : '0');
+  };
+  const startRollResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    const startY = e.clientY;
+    const startH = rollHeight;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    let h = startH;
+    const move = (ev: PointerEvent) => {
+      h = Math.min(Math.round(window.innerHeight * 0.7), Math.max(100, startH + (startY - ev.clientY)));
+      setRollHeight(h);
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      writePref('mmlstudio.roll.height', String(h));
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  };
 
   const handlePlay = () => {
     setNotice(null);
@@ -295,6 +327,37 @@ export default function App() {
     setNotice(`「${outputBase}.mid」（SMF Type 1）を書き出しました。`);
   };
 
+  const menus: Menu[] = [
+    {
+      label: 'ファイル',
+      items: [
+        { label: '新規（エディタをクリア）', onSelect: clearEditor },
+        { label: 'MMLを開く…', onSelect: () => mmlInputRef.current?.click(), separatorBefore: true },
+        { label: 'MIDIを開く…', onSelect: () => midiInputRef.current?.click(), disabled: importBusy, title: importBusy ? 'MIDI を変換中です' : undefined },
+        { label: 'MML保存', onSelect: saveMml, separatorBefore: true },
+        {
+          label: 'MIDI書き出し',
+          onSelect: exportMidi,
+          disabled: hasErrors,
+          title: hasErrors ? 'エラーがあるため書き出せません' : 'SMF Type 1 で書き出し',
+        },
+      ],
+    },
+    {
+      label: '変換',
+      items: [{ label: '他の MML から変換…', onSelect: () => setDialog('dialect'), title: 'PC-9801 / PC-8801 / MSX の PLAY 文、picosakura（サクラ MML）' }],
+    },
+    { label: 'サンプル', items: SAMPLES.map((smp) => ({ label: smp.title, onSelect: () => loadSample(smp.id) })) },
+    {
+      label: 'ヘルプ',
+      items: [
+        { label: 'ヘルプ', onSelect: () => setDialog('help') },
+        { label: '音色一覧', onSelect: () => setDialog('instruments') },
+        { label: '音源情報・ライセンス', onSelect: () => setDialog('license') },
+      ],
+    },
+  ];
+
   return (
     <div
       className={`app${dragging ? ' dragging' : ''}`}
@@ -321,75 +384,35 @@ export default function App() {
       )}
       <header className="app-header">
         <h1>MML Studio</h1>
-        <nav className="toolbar" aria-label="ファイル操作">
-          <button type="button" className="tool-btn" onClick={clearEditor}>
-            クリア
-          </button>
-          <button type="button" className="tool-btn" onClick={() => mmlInputRef.current?.click()}>
-            MMLを開く
-          </button>
-          <input
-            ref={mmlInputRef}
-            type="file"
-            accept=".mml,.txt,text/plain"
-            className="visually-hidden"
-            tabIndex={-1}
-            aria-label="MML ファイル"
-            data-testid="mml-input"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = '';
-              if (f) void openMmlFile(f);
-            }}
-          />
-          <button type="button" className="tool-btn" onClick={() => midiInputRef.current?.click()} disabled={importBusy}>
-            MIDIを開く
-          </button>
-          <input
-            ref={midiInputRef}
-            type="file"
-            accept=".mid,.midi,audio/midi,audio/x-midi"
-            className="visually-hidden"
-            tabIndex={-1}
-            aria-label="MIDI ファイル"
-            data-testid="midi-input"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = '';
-              if (f) void openMidiFile(f);
-            }}
-          />
-          <button type="button" className="tool-btn" onClick={() => setDialog('dialect')}>
-            他の MML から変換
-          </button>
-          <button type="button" className="tool-btn" onClick={saveMml}>
-            MML保存
-          </button>
-          <button type="button" className="tool-btn" onClick={exportMidi} disabled={hasErrors} title={hasErrors ? 'エラーがあるため書き出せません' : 'SMF Type 1 で書き出し'}>
-            MIDI書き出し
-          </button>
-          <label className="sample-picker">
-            <span className="visually-hidden">サンプル</span>
-            <select aria-label="サンプルを読み込む" value="" onChange={(e) => loadSample(e.target.value)}>
-              <option value="" disabled>
-                サンプル…
-              </option>
-              {SAMPLES.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        </nav>
-        <nav className="toolbar toolbar-right" aria-label="情報">
-          <button type="button" className="tool-btn" onClick={() => setDialog('instruments')}>
-            音色一覧
-          </button>
-          <button type="button" className="tool-btn" onClick={() => setDialog('help')}>
-            ヘルプ
-          </button>
-        </nav>
+        <MenuBar label="メニュー" menus={menus} />
+        <input
+          ref={mmlInputRef}
+          type="file"
+          accept=".mml,.txt,text/plain"
+          className="visually-hidden"
+          tabIndex={-1}
+          aria-label="MML ファイル"
+          data-testid="mml-input"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void openMmlFile(f);
+          }}
+        />
+        <input
+          ref={midiInputRef}
+          type="file"
+          accept=".mid,.midi,audio/midi,audio/x-midi"
+          className="visually-hidden"
+          tabIndex={-1}
+          aria-label="MIDI ファイル"
+          data-testid="midi-input"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void openMidiFile(f);
+          }}
+        />
         <span className="doc-name" data-testid="doc-name">
           {fileName ?? '無題'}
           {dirty ? ' ●' : ''}
@@ -400,6 +423,42 @@ export default function App() {
       <main className="workspace">
         <div className="editor-pane">
           <MmlEditor ref={editorRef} initialValue={initial.source} diagnostics={diagnostics} onChange={onChange} />
+          {rollOpen ? (
+            <div className="roll-panel" style={{ height: rollHeight }}>
+              <div
+                className="roll-resize"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="演奏表示の高さ"
+                aria-valuenow={rollHeight}
+                tabIndex={0}
+                onPointerDown={startRollResize}
+                onKeyDown={(e) => {
+                  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+                  e.preventDefault();
+                  const h = Math.min(600, Math.max(100, rollHeight + (e.key === 'ArrowUp' ? 20 : -20)));
+                  setRollHeight(h);
+                  writePref('mmlstudio.roll.height', String(h));
+                }}
+              />
+              <PlaybackPanel
+                data={rollData}
+                time={player.currentTime}
+                playing={player.state === 'playing'}
+                canSeek={player.state === 'playing' || player.state === 'paused'}
+                onSeek={player.seek}
+                onJump={(span) => editorRef.current?.jumpTo(span.startOffset, span.endOffset)}
+                sourceLabel={playingOriginal ? `元 MIDI（${midiDoc.fileName}）` : hasErrors ? 'MML（最後に成功したコンパイル結果）' : 'MML'}
+                onClose={() => toggleRoll(false)}
+              />
+            </div>
+          ) : (
+            <div className="roll-closed">
+              <button type="button" className="link-btn roll-toggle" aria-expanded="false" onClick={() => toggleRoll(true)}>
+                ▸ 演奏表示（ピアノロール・チャンネル）
+              </button>
+            </div>
+          )}
         </div>
         <aside className="side-pane">
           {midiDoc && (
@@ -468,4 +527,20 @@ export default function App() {
       )}
     </div>
   );
+}
+
+/** per-viewer UI preferences; storage may be unavailable */
+function readPref(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
 }

@@ -4,7 +4,7 @@
 MML の解析・コンパイル・MIDI（SMF）書き出しはすべて独自の TypeScript エンジン（`src/engine/`）で行い、
 音声合成だけを [spessasynth_lib](https://github.com/spessasus/spessasynth_lib) に任せています。仕様は [SPEC.md](SPEC.md)。
 
-> **進捗**: Phase 0〜6 実装済み（MML プレイヤー MVP、MIDI インポート／MML 変換、安定化、PC-9801 PLAY 文・picosakura からの変換）。
+> **進捗**: Phase 0〜6 実装済み（MML プレイヤー MVP、MIDI インポート／MML 変換、安定化、PC-9801 / PC-8801 / MSX の PLAY 文・picosakura からの変換）、ピアノロール。
 
 ![MML Studio の画面](docs/screenshot.png)
 
@@ -13,6 +13,7 @@ MML の解析・コンパイル・MIDI（SMF）書き出しはすべて独自の
 - MML エディタ（CodeMirror 6、色分け、行・列付きエラーと波線、クリックで該当箇所へジャンプ）
 - 1つの MML に複数トラック／複数 MIDI チャンネル、GM 128 音色、CH10 の GM ドラム
 - 再生・一時停止・停止・シーク、現在時刻／曲長表示（スケジューリングは SpessaSynth の Sequencer）
+- **演奏表示**: 演奏中の音を鍵盤とピアノロールで表示（トラックごとに色分け、音符のクリックで MML の該当箇所へ、拡大縮小・シーク）。チャンネル表示（音色・Vol・Exp・Pan・PB・レベル・鍵盤）にも切り替えられ、トラックごとに表示・非表示を選べます。元 MIDI の再生にも対応
 - `.mml` の読み込み・保存、`.mid`（SMF Type 1 / PPQ 480）書き出し
 - 標準音源 GeneralUser GS v2.0.3、ローカル `.sf2` への切り替え（アップロードなし）
 - GM 音色一覧（検索・`@N` コピー）、ヘルプ、音源ライセンス表示、localStorage への下書き自動保存
@@ -92,7 +93,7 @@ MML Studio は**サクラ MML と完全互換ではありません**。サクラ
 
 ## MIDI インポート（MIDI → MML）
 
-- 「MIDIを開く」またはファイルをドロップ（最大 20 MiB、30 万イベント、Note On 10 万）。読み取り・変換・検証は Web Worker 内で行い、外部へ送信しません。
+- 「ファイル」メニューの「MIDIを開く」またはファイルをドロップ（最大 20 MiB、30 万イベント、Note On 10 万）。読み取り・変換・検証は Web Worker 内で行い、外部へ送信しません。
 - **忠実度優先**（初期値）: `TR(0) TempoUS(...)`、チャンネルごとに `TR(N) CH(N)`、`Time(M:B:S)`・`v`・`q%N`・`n60%N`・和音 `'n60 n64'%N`・`Sub{}` で
   音高・ベロシティ・開始 tick・実際の Note Off tick・テンポ（μs）・音色・CC・PB を再現します。生成した MML を独自コンパイラで再コンパイルし、
   元 MIDI（480 PPQ に丸めたもの）とイベント単位で一致しない場合は成功扱いにしません。
@@ -107,7 +108,7 @@ MML Studio は**サクラ MML と完全互換ではありません**。サクラ
 
 ## 他の MML 方言からの変換
 
-「他の MML から変換」で、別の方言で書かれた MML を貼り付けて MML Studio の MML に書き換えられます（MML Studio の文法自体は変えていません）。
+「変換」メニューの「他の MML から変換」で、別の方言で書かれた MML を貼り付けて MML Studio の MML に書き換えられます（MML Studio の文法自体は変えていません）。
 対応している方言は次の 2 つです。
 
 - **PC-9801 の PLAY 文**（`"0101","曲名",…` の見出し行と `01 "パート1","パート2",…` の演奏行の形式）

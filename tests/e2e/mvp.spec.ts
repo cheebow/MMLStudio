@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { menu } from './menu';
 
 const state = (page: Page) => page.getByTestId('player-state');
 
@@ -24,11 +25,11 @@ test('open .mml, save .mml, export .mid', async ({ page }) => {
   await expect(page.locator('.cm-content')).toContainText('cdefgab>c');
   await expect(page.getByTestId('doc-name')).toHaveText('my-song.mml');
 
-  const [mml] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'MML保存' }).click()]);
+  const [mml] = await Promise.all([page.waitForEvent('download'), menu(page, 'ファイル', 'MML保存')]);
   expect(mml.suggestedFilename()).toBe('my-song.mml');
   expect(readFileSync((await mml.path())!, 'utf8')).toBe('TR(1) CH(1) @1 o4 l8 cdefgab>c\n');
 
-  const [mid] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'MIDI書き出し' }).click()]);
+  const [mid] = await Promise.all([page.waitForEvent('download'), menu(page, 'ファイル', 'MIDI書き出し')]);
   expect(mid.suggestedFilename()).toBe('my-song.mid');
   const bytes = readFileSync((await mid.path())!);
   expect(bytes.subarray(0, 4).toString('latin1')).toBe('MThd');
@@ -37,10 +38,42 @@ test('open .mml, save .mml, export .mid', async ({ page }) => {
 });
 
 test('MIDI export is disabled while the MML has errors', async ({ page }) => {
+  const fileMenu = page.getByRole('navigation', { name: 'メニュー' }).getByRole('button', { name: 'ファイル', exact: true });
+  const exportItem = page.getByRole('menuitem', { name: 'MIDI書き出し' });
   await replaceEditor(page, 'c4 x');
-  await expect(page.getByRole('button', { name: 'MIDI書き出し' })).toBeDisabled();
+  await fileMenu.click();
+  await expect(exportItem).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Escape');
   await replaceEditor(page, 'c4');
-  await expect(page.getByRole('button', { name: 'MIDI書き出し' })).toBeEnabled();
+  await fileMenu.click();
+  await expect(exportItem).not.toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Escape');
+});
+
+test('header menus work with the keyboard', async ({ page }) => {
+  const bar = page.getByRole('navigation', { name: 'メニュー' });
+  await bar.getByRole('button', { name: 'ファイル', exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: '新規（エディタをクリア）' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: 'MMLを開く…' })).toBeFocused();
+  // → moves to the next menu
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('menuitem', { name: '他の MML から変換…' })).toBeFocused();
+  // Esc closes and returns focus to the menu button
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(bar.getByRole('button', { name: '変換', exact: true })).toBeFocused();
+  // Enter on an item runs it
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog')).toContainText('他の MML から変換');
+  await page.keyboard.press('Escape');
+  // a click outside closes an open menu
+  await bar.getByRole('button', { name: 'サンプル', exact: true }).click();
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.locator('.cm-content').click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
 });
 
 test('unsaved edits require confirmation before opening another file', async ({ page }) => {
@@ -50,12 +83,12 @@ test('unsaved edits require confirmation before opening another file', async ({ 
     asked = d.message();
     await d.dismiss();
   });
-  await page.getByLabel('サンプルを読み込む').selectOption('scale');
+  await menu(page, 'サンプル', 'ピアノの音階');
   expect(asked).toContain('破棄');
   await expect(page.locator('.cm-content')).toHaveText('o5 c d e');
 
   page.once('dialog', (d) => d.accept());
-  await page.getByLabel('サンプルを読み込む').selectOption('scale');
+  await menu(page, 'サンプル', 'ピアノの音階');
   await expect(page.locator('.cm-content')).toContainText('cdef gab>c');
 });
 
@@ -83,7 +116,7 @@ test('app still works when localStorage throws', async ({ page }) => {
 });
 
 test('instrument list search and help / license dialogs', async ({ page }) => {
-  await page.getByRole('button', { name: '音色一覧' }).click();
+  await menu(page, 'ヘルプ', '音色一覧');
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await dialog.getByLabel('音色を検索').fill('string ensemble');
@@ -94,9 +127,9 @@ test('instrument list search and help / license dialogs', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
 
-  await page.getByRole('button', { name: 'ヘルプ' }).click();
+  await menu(page, 'ヘルプ', 'ヘルプ');
   await expect(page.getByRole('dialog')).toContainText('サクラ MML と完全互換ではありません');
-  await page.getByRole('button', { name: '閉じる' }).click();
+  await page.getByRole('button', { name: '閉じる', exact: true }).click();
 
   await page.getByRole('button', { name: '音源情報・ライセンス' }).click();
   await expect(page.getByRole('dialog')).toContainText('GeneralUser GS v2.0.3');
@@ -155,11 +188,11 @@ test('クリア empties the editor (confirming unsaved edits) and the previous c
   await expect(page.getByTestId('doc-name')).toContainText('●');
   // cancel keeps the text
   page.once('dialog', (d) => d.dismiss());
-  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await menu(page, 'ファイル', '新規（エディタをクリア）');
   await expect(page.locator('.cm-content')).toContainText('o4 c d e');
   // accept clears it
   page.once('dialog', (d) => d.accept());
-  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await menu(page, 'ファイル', '新規（エディタをクリア）');
   await expect(page.locator('.cm-content')).toHaveText('');
   await expect(page.getByTestId('doc-name')).toHaveText('無題');
   await expect(page.getByText('演奏トラックはまだありません。')).toBeVisible();
@@ -169,7 +202,7 @@ test('クリア empties the editor (confirming unsaved edits) and the previous c
   await expect(page.locator('.cm-content')).toHaveText('TR(1) CH(1) g');
   // restore
   page.once('dialog', (d) => d.accept());
-  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await menu(page, 'ファイル', '新規（エディタをクリア）');
   await page.getByRole('button', { name: 'クリア前の MML に戻す' }).click();
   await expect(page.locator('.cm-content')).toHaveText('TR(1) CH(1) g');
   await expect(page.getByText('クリア前の MML に戻しました。')).toBeVisible();
@@ -181,7 +214,7 @@ test('クリア without unsaved edits does not ask for confirmation', async ({ p
     asked = true;
     void d.dismiss();
   });
-  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await menu(page, 'ファイル', '新規（エディタをクリア）');
   await expect(page.locator('.cm-content')).toHaveText('');
   expect(asked).toBe(false);
 });

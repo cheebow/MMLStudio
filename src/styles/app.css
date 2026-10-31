@@ -155,3 +155,42 @@ button, select, input { font: inherit; color: inherit; }
 .dialect-preview { max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 8px; border-radius: 6px; white-space: pre; margin: 8px 0; }
 .dialect .msg-warning ul, .dialect .msg-error ul { margin: 4px 0; padding-left: 18px; }
 .primary-btn { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+/* Piano roll (SPEC 6.4) */
+.editor-pane { display: flex; flex-direction: column; }
+.editor-pane .editor-host { flex: 1; min-height: 0; height: auto; }
+.roll-panel { display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--surface); flex: none; }
+.roll-resize { height: 6px; margin-top: -3px; cursor: ns-resize; touch-action: none; }
+.roll-resize:hover, .roll-resize:focus-visible { background: var(--accent); opacity: 0.4; outline: none; }
+.roll { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.roll-bar { display: flex; align-items: center; gap: 10px; padding: 2px 8px; font-size: 12px; flex-wrap: nowrap; overflow: hidden; }
+.roll-toggle { font-size: 12px; text-decoration: none; white-space: nowrap; }
+.roll-legend { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin; flex: 1; min-width: 0; white-space: nowrap; color: var(--muted); }
+.roll-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; font: inherit; padding: 0 4px; cursor: pointer; }
+.roll-chip:hover { border-color: var(--border); }
+.roll-chip[aria-pressed='false'] { opacity: 0.4; text-decoration: line-through; }
+.viz-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
+.viz-tab { border: none; background: var(--surface); color: var(--muted); font: inherit; font-size: 12px; padding: 1px 8px; cursor: pointer; }
+.viz-tab[aria-selected='true'] { background: var(--accent); color: var(--accent-text); }
+.monitor-wrap { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.monitor-canvas { display: block; width: 100%; }
+.roll-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.roll-zoom { display: flex; gap: 4px; }
+.roll-zoom .small-btn { padding: 0 8px; line-height: 18px; }
+.roll-canvas-wrap { position: relative; flex: 1; min-height: 0; }
+.roll-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
+.roll-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.roll-closed { border-top: 1px solid var(--border); background: var(--surface); padding: 2px 8px; flex: none; }
+
+/* Menu bar (SPEC 6.2) */
+.menubar { display: flex; gap: 2px; align-items: center; }
+.menu { position: relative; }
+.menu-button { border: 1px solid transparent; border-radius: 6px; background: none; color: inherit; font: inherit; padding: 4px 10px; cursor: pointer; }
+.menu-button:hover, .menu-button[aria-expanded='true'] { background: var(--bg); border-color: var(--border); }
+.menu-button:focus-visible, .menu-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.menu-list { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 220px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); }
+.menu-item { display: block; width: 100%; text-align: left; border: none; border-radius: 4px; background: none; color: inherit; font: inherit; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.menu-item:hover:not([aria-disabled='true']), .menu-item:focus { background: var(--bg); outline: none; }
+.menu-item[aria-disabled='true'] { color: var(--muted); cursor: default; }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.app-header .doc-name { margin-left: auto; }

@@ -1,5 +1,6 @@
 // Phase 6a: convert PC-9801 PLAY data pasted into the dialog, apply it to the editor and play.
 import { expect, test } from '@playwright/test';
+import { menu } from './menu';
 
 const PC98 = `"0001","テスト曲",2,3,6
 01 "MBQ7L8@46T140@V110Z0,3","MBL4@13T140V12","R1"
@@ -15,7 +16,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('paste PC-9801 data, pick a song, convert, apply and play; the previous MML can be restored', async ({ page }) => {
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('変換する MML').fill(PC98);
   await expect(dialog).toContainText('自動判定: PC-9801 PLAY 文');
@@ -37,7 +38,7 @@ test('paste PC-9801 data, pick a song, convert, apply and play; the previous MML
   await page.getByRole('button', { name: '停止', exact: true }).click();
 
   // the second song
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   await dialog.getByLabel('変換する MML').fill(PC98);
   await dialog.getByLabel('変換する曲').selectOption({ index: 1 });
   await dialog.getByRole('button', { name: '変換', exact: true }).click();
@@ -51,7 +52,7 @@ test('paste PC-9801 data, pick a song, convert, apply and play; the previous MML
 });
 
 test('conversion errors are shown with line and column; nothing is applied', async ({ page }) => {
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('変換する MML').fill('10 "CDX"\n20 GOTO 10');
   await dialog.getByRole('button', { name: '変換', exact: true }).click();
@@ -60,7 +61,7 @@ test('conversion errors are shown with line and column; nothing is applied', asy
 });
 
 test('picosakura (Japanese MML) is detected, converted, applied and played', async ({ page }) => {
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('変換する MML').fill('曲名{"ドレミの歌"}\nテンポ１２０\nトラック１ 音色１ 音階５ 八分音符\nドレミファソーラシ 「ドミソ」４\nトラック２ 音色３３ 音階３ ド２ ソ２');
   await expect(dialog).toContainText('自動判定: picosakura');
@@ -76,7 +77,7 @@ test('picosakura (Japanese MML) is detected, converted, applied and played', asy
 });
 
 test('picosakura programs show the MIDI export hint; best-effort mode skips what cannot be converted', async ({ page }) => {
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('方言').selectOption('sakura');
   await dialog.getByLabel('変換する MML').fill('TR 1\nInclude(delay.h) For(Int I = 0; I < 4; I++){ c }\nMidiDelay({d},8,!2)');
@@ -103,7 +104,7 @@ test('a Shift_JIS text file (Sakura board download) is read and converted', asyn
     0x8b, 0xc8, 0x96, 0xbc, 0x7b, 0x22, 0x83, 0x65, 0x83, 0x58, 0x83, 0x67, 0x22, 0x7d, 0x0d, 0x0a, 0x83, 0x67, 0x83, 0x89, 0x83, 0x62, 0x83, 0x4e,
     0x82, 0x50, 0x20, 0x83, 0x68, 0x83, 0x8c, 0x83, 0x7e,
   ]);
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByTestId('dialect-file').setInputFiles({ name: 'sakura.mml', mimeType: 'text/plain', buffer: sjis });
   await expect(dialog.getByTestId('dialect-file-note')).toContainText('Shift_JIS');
@@ -113,7 +114,7 @@ test('a Shift_JIS text file (Sakura board download) is read and converted', asyn
 });
 
 test('an MSX-BASIC program is detected, converted, applied and played', async ({ page }) => {
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('変換する MML').fill(`10 ' テストの曲
 20 CALL MUSIC
@@ -134,7 +135,7 @@ test('an MSX-BASIC program is detected, converted, applied and played', async ({
 });
 
 test('a PC-8801 CMD PLAY program is detected and converted', async ({ page }) => {
-  await page.getByRole('button', { name: '他の MML から変換' }).click();
+  await menu(page, '変換', '他の MML から変換…');
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('変換する MML').fill('10 S=2:T=13\n20 CMD PLAY #S,"@=T;T120O4L8CDEFG","@4O2L2CG",,"V10O5C1"');
   await expect(dialog).toContainText('自動判定: PC-8801');

@@ -1,6 +1,7 @@
 // Phase 4 browser tests: MIDI open -> MML, original/MML playback switch (L45), reconvert, D&D.
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { menu } from './menu';
 import { build, cc, off, on, program, tempo, text } from '../helpers/smf-build';
 
 const state = (page: Page) => page.getByTestId('player-state');
@@ -44,7 +45,7 @@ test('open MIDI -> fidelity MML, verified, lost events listed', async ({ page })
   // The tall import panel must not make the whole page scroll (hidden inputs stay inside the side pane).
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
   // MIDI export of the converted MML works
-  const [mid] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'MIDI書き出し' }).click()]);
+  const [mid] = await Promise.all([page.waitForEvent('download'), menu(page, 'ファイル', 'MIDI書き出し')]);
   expect(mid.suggestedFilename()).toBe('song.mid');
   expect(readFileSync((await mid.path())!).subarray(0, 4).toString('latin1')).toBe('MThd');
 });
