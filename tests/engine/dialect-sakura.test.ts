@@ -137,6 +137,19 @@ describe('picosakura acceptance L62–L79', () => {
     ]);
   });
 
+  it('L76b drum hiragana outside a rhythm block (in a #macro), with `,,v` velocities', () => {
+    const { r, song } = conv('トラック１０ #D={ v70 l16 Sub{ ぱ,,100つつつ|つつつつ } ず,,127つ|ち,,50つ } [2 #D]');
+    const n = notes(song);
+    expect(n.every((x) => x.channel === 9)).toBe(true);
+    const vel = (p: number) => [...new Set(n.filter((x) => x.pitch === p).map((x) => x.velocity))];
+    expect(vel(49)).toEqual([100]); // ぱ,,100
+    expect(vel(36)).toEqual([127]); // ず,,127
+    expect(vel(46)).toEqual([50]); // ち,,50
+    expect(vel(42)).toEqual([70]); // つ (v70)
+    expect(n.filter((x) => x.pitch === 49).map((x) => x.startTick)).toEqual([0, 480]); // [2 #D]: Sub does not advance; the rest is 4 sixteenths
+    expect(r.ok && r.warnings.map((w) => w.code)).toContain('W_SAKURA_JA_DRUM');
+  });
+
   it('L76 Japanese MML equals the English MML', () => {
     const ja = notes(conv('音階５ ドレミファー ソッ「ドミソ」４ テンポ１２０ トラック２ ペダル 放す ド').song).map((n) => [n.channel, n.pitch, n.startTick, n.durationTicks]);
     const en = notes(conv("o5 cdef^ gr'ceg'4 Tempo=120 Track=2 y64,127; y64,0; c").song).map((n) => [n.channel, n.pitch, n.startTick, n.durationTicks]);

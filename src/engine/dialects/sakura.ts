@@ -282,6 +282,11 @@ function replaceJapanese(src: SChar[], warn: Warnings): SChar[] {
       }
       if (ok && (!hit || w.length > hit[0].length)) hit = entry;
     }
+    if (!hit && rhythmDepth === 0) {
+      // drum hiragana outside a rhythm block (e.g. in a #macro): they do not overlap the other words
+      hit = JA_DRUMS.find(([w]) => w === c.ch);
+      if (hit) warn.add('W_SAKURA_JA_DRUM', `リズムブロックの外のドラム用ひらがな「${c.ch}」を、リズム表記と同じ ${hit[1].replace(',', '')} として変換しました（推定）。`, c);
+    }
     if (!hit) fail('E_SAKURA_CHAR', `変換できない文字です: ${c.ch}`, c);
     japanese = true;
     out.push(...charsOf(hit[1], c));

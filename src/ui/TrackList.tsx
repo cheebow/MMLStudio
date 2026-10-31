@@ -1,5 +1,6 @@
 import { DRUM_CHANNEL_INDEX, instrumentName } from '../audio/instrument-names';
 import type { CompiledSong } from '../engine';
+import { trackVoice } from './track-voice';
 
 interface Props {
   song: CompiledSong | null;
@@ -27,14 +28,11 @@ export function TrackList({ song, stale }: Props) {
           </thead>
           <tbody>
             {song.tracks.map((t) => {
-              const programs = t.events.filter((e) => e.kind === 'program');
               const notes = t.events.filter((e) => e.kind === 'note').length;
               const isDrum = t.channel === DRUM_CHANNEL_INDEX;
-              const first = programs[0];
-              const name = isDrum
-                ? 'GM ドラム'
-                : `@${(first && first.tick === 0 ? first.program : 0) + 1} ${instrumentName(first && first.tick === 0 ? first.program : 0)}`;
-              const extra = programs.length - (first && first.tick === 0 ? 1 : 0);
+              const voice = trackVoice(t.events);
+              const name = isDrum ? 'GM ドラム' : `@${voice.program + 1} ${instrumentName(voice.program)}`;
+              const extra = isDrum ? 0 : voice.changes;
               return (
                 <tr key={t.number}>
                   <td>{t.number}</td>
