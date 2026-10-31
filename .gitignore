@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.DS_Store
+# Generated: copied from node_modules/spessasynth_lib by scripts/copy-worklet.mjs
+public/spessasynth_processor.min.js
+# SoundFont binary (~32MB). Fetch with `npm run fetch-soundfont` (official GitHub, SHA-256 pinned).
+# License text in public/licenses/ IS committed.
+public/soundfonts/*.sf2
