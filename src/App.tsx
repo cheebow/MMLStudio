@@ -54,7 +54,8 @@ export default function App() {
   const [midiDoc, setMidiDoc] = useState<MidiDocument | null>(null);
   const [playSource, setPlaySource] = useState<PlaySource>('mml');
   const [importBusy, setImportBusy] = useState(false);
-  const [backup, setBackup] = useState<{ text: string; fileName: string | null } | null>(null);
+  /** the editor content before a conversion or a clear; `kind` names the restore link */
+  const [backup, setBackup] = useState<{ text: string; fileName: string | null; kind: 'convert' | 'clear' } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [source, setSource] = useState(initial.source);
   const [fileName, setFileName] = useState<string | null>(initial.fileName);
@@ -189,7 +190,7 @@ export default function App() {
       if (importJob.current !== job) return;
       if (r.ok) {
         // Keep what the editor had so it can be restored.
-        setBackup({ text: editorRef.current?.getValue() ?? source, fileName });
+        setBackup({ text: editorRef.current?.getValue() ?? source, fileName, kind: 'convert' });
         replaceDocument(r.mml, `${baseName(name)}.mml`);
         setMidiDoc({ fileName: name, bytes, options, summary: r.summary, issues: [], generatedMml: r.mml });
         setPlaySource('mml');
@@ -237,12 +238,24 @@ export default function App() {
     replaceDocument(backup.text, backup.fileName);
     setBackup(null);
     setPlaySource('mml');
-    setNotice('変換前の MML に戻しました。');
+    setNotice(backup.kind === 'clear' ? 'クリア前の MML に戻しました。' : '変換前の MML に戻しました。');
+  };
+
+  /** Empties the editor (a new, untitled document). The previous content can be restored. */
+  const clearEditor = () => {
+    const current = editorRef.current?.getValue() ?? source;
+    if (current === '' && !midiDoc) return;
+    if (dirty && !window.confirm('編集中の MML を消去しますか？（消去した内容は「クリア前の MML に戻す」で元に戻せます）')) return;
+    closeMidi();
+    setBackup({ text: current, fileName, kind: 'clear' });
+    replaceDocument('', null);
+    setNotice('エディタをクリアしました。');
+    editorRef.current?.focus();
   };
 
   const applyDialect = (mml: string, title: string | undefined) => {
     if (!confirmDiscard('変換結果')) return;
-    setBackup({ text: editorRef.current?.getValue() ?? source, fileName });
+    setBackup({ text: editorRef.current?.getValue() ?? source, fileName, kind: 'convert' });
     replaceDocument(mml, title ? `${title.replace(/[\\/:*?"<>|]/g, '_')}.mml` : null);
     setDialog(null);
     setNotice('変換した MML をエディタに反映しました。');
@@ -309,6 +322,9 @@ export default function App() {
       <header className="app-header">
         <h1>MML Studio</h1>
         <nav className="toolbar" aria-label="ファイル操作">
+          <button type="button" className="tool-btn" onClick={clearEditor}>
+            クリア
+          </button>
           <button type="button" className="tool-btn" onClick={() => mmlInputRef.current?.click()}>
             MMLを開く
           </button>
@@ -435,7 +451,7 @@ export default function App() {
           {notice && <span className="msg-info">ℹ {notice}</span>}
           {backup && !midiDoc && (
             <button type="button" className="link-btn" onClick={restoreBackup}>
-              変換前の MML に戻す
+              {backup.kind === 'clear' ? 'クリア前の MML に戻す' : '変換前の MML に戻す'}
             </button>
           )}
           {hasErrors && !playingOriginal && <span className="msg-error">✖ MML にエラーがあります（再生と MIDI 書き出しは無効）</span>}

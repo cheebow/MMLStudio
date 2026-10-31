@@ -149,3 +149,39 @@ test('missing default SoundFont (404) is reported with guidance and a local SF2 
   await page.getByRole('button', { name: '再生', exact: true }).click();
   await expect(state(page)).toHaveAttribute('data-state', 'playing', { timeout: 30_000 });
 });
+
+test('クリア empties the editor (confirming unsaved edits) and the previous content can be restored', async ({ page }) => {
+  await replaceEditor(page, 'TR(1) CH(1) o4 c d e');
+  await expect(page.getByTestId('doc-name')).toContainText('●');
+  // cancel keeps the text
+  page.once('dialog', (d) => d.dismiss());
+  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await expect(page.locator('.cm-content')).toContainText('o4 c d e');
+  // accept clears it
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await expect(page.locator('.cm-content')).toHaveText('');
+  await expect(page.getByTestId('doc-name')).toHaveText('無題');
+  await expect(page.getByText('演奏トラックはまだありません。')).toBeVisible();
+  await expect(page.getByText('エディタをクリアしました。')).toBeVisible();
+  // typing works right away (the editor has focus)
+  await page.keyboard.insertText('TR(1) CH(1) g');
+  await expect(page.locator('.cm-content')).toHaveText('TR(1) CH(1) g');
+  // restore
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await page.getByRole('button', { name: 'クリア前の MML に戻す' }).click();
+  await expect(page.locator('.cm-content')).toHaveText('TR(1) CH(1) g');
+  await expect(page.getByText('クリア前の MML に戻しました。')).toBeVisible();
+});
+
+test('クリア without unsaved edits does not ask for confirmation', async ({ page }) => {
+  let asked = false;
+  page.on('dialog', (d) => {
+    asked = true;
+    void d.dismiss();
+  });
+  await page.getByRole('button', { name: 'クリア', exact: true }).click();
+  await expect(page.locator('.cm-content')).toHaveText('');
+  expect(asked).toBe(false);
+});
