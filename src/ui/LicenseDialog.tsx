@@ -18,9 +18,13 @@ export function LicenseDialog({ open, onClose }: Props) {
     let alive = true;
     for (const f of FILES) {
       fetch(`${import.meta.env.BASE_URL}${f.path}`)
-        .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then(
+          (r) => (r.ok ? r.text() : Promise.reject(new Error(`サーバーがエラーを返しました（HTTP ${r.status}）`))),
+          // fetch() itself rejects only when the server cannot be reached ("Load failed" in Safari).
+          (e: Error) => Promise.reject(new Error(`サーバーに接続できませんでした（${e.message}）。サーバーが動いているか確認し、ページを再読み込みしてください`)),
+        )
         .then((t) => alive && setTexts((s) => ({ ...s, [f.path]: t })))
-        .catch((e: Error) => alive && setTexts((s) => ({ ...s, [f.path]: `ライセンス文書を読み込めませんでした（${e.message}）。` })));
+        .catch((e: Error) => alive && setTexts((s) => ({ ...s, [f.path]: `ライセンス文書を読み込めませんでした: ${e.message}。（ダイアログを開き直すと再取得します）` })));
     }
     return () => {
       alive = false;
