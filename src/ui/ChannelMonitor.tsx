@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { GM_INSTRUMENTS } from '../engine';
 import { isBlackKey, levelAt, notesAt, valueAt, type RollData } from './roll-data';
+import { RAIL_HEAD_H, RAIL_ROW_H } from './TrackRail';
 import { cssVar, laneColor, prefersDark } from './viz-colors';
 
 interface Props {
@@ -9,11 +10,13 @@ interface Props {
   time: number;
   /** lanes switched off in the legend (shown dimmed) */
   hidden: ReadonlySet<number>;
+  /** the track column (names, show / mute / solo); scrolls with the rows */
+  rail: ReactNode;
 }
 
-const HEAD_H = 18;
-const ROW_H = 22;
-const COL = { label: 44, voice: 150, meter: 44, level: 64 };
+const HEAD_H = RAIL_HEAD_H;
+const ROW_H = RAIL_ROW_H;
+const COL = { label: 6, voice: 150, meter: 44, level: 64 };
 
 /** white-key index of a MIDI pitch (C-1 = 0) and the number of white keys in 0..127 */
 const WHITE_BEFORE = (() => {
@@ -31,8 +34,9 @@ const WHITE_COUNT = 75;
  * Channel monitor (SPEC 6.3): one row per track / channel with the voice, volume, expression,
  * pan, pitch bend, a level meter and a full-range keyboard that lights the sounding keys.
  */
-export function ChannelMonitor({ data, time, hidden }: Props) {
+export function ChannelMonitor({ data, time, hidden, rail }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** the canvas column (measured for the width) */
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const rows = data?.tracks.length ?? 0;
@@ -95,7 +99,6 @@ export function ChannelMonitor({ data, time, hidden }: Props) {
     g.textBaseline = 'middle';
     g.fillStyle = muted;
     const head = (label: string, x: number) => g.fillText(label, x, HEAD_H / 2);
-    head('トラック', 2);
     head('音色', xVoice);
     head('Vol', xVol);
     head('Exp', xExp);
@@ -127,13 +130,8 @@ export function ChannelMonitor({ data, time, hidden }: Props) {
         g.fillRect(0, y, width, ROW_H);
       }
       const mid = y + ROW_H / 2;
-      // label
-      g.fillStyle = color;
-      g.fillRect(2, y + 5, 4, ROW_H - 10);
-      g.fillStyle = text;
       g.font = '11px system-ui, sans-serif';
-      g.fillText(tr.label, 9, mid);
-      // voice
+      // voice (the track name is in the track column)
       const program = valueAt(tr.program, time, 0);
       const name = tr.drum ? `ドラム（CH${tr.channel + 1}）` : `${program + 1} ${GM_INSTRUMENTS[program] ?? ''}`;
       g.save();
@@ -191,16 +189,21 @@ export function ChannelMonitor({ data, time, hidden }: Props) {
   }, [data, time, hidden, width, height, rows]);
 
   return (
-    <div className="monitor-wrap" ref={wrapRef}>
-      <canvas
-        ref={canvasRef}
-        className="monitor-canvas"
-        style={{ height }}
-        role="img"
-        aria-label={`チャンネル表示（${rows} トラック）。音色・音量・エクスプレッション・パン・ピッチベンド・レベル・鳴っている鍵盤を表示します。`}
-        data-testid="channel-monitor"
-        data-active={active}
-      />
+    <div className="monitor-wrap">
+      <div className="monitor-rows">
+        {rail}
+        <div className="monitor-canvas-col" ref={wrapRef}>
+          <canvas
+            ref={canvasRef}
+            className="monitor-canvas"
+            style={{ height }}
+            role="img"
+            aria-label={`チャンネル表示（${rows} トラック）。音色・音量・エクスプレッション・パン・ピッチベンド・レベル・鳴っている鍵盤を表示します。`}
+            data-testid="channel-monitor"
+            data-active={active}
+          />
+        </div>
+      </div>
     </div>
   );
 }

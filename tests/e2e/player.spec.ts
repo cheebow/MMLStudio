@@ -107,7 +107,7 @@ test('piano roll: shown by default, lights the sounding notes, jumps to the MML 
   await expect(page.getByTestId('piano-roll')).toBeVisible();
 });
 
-test('track show / hide in the legend, and the channel view', async ({ page }) => {
+test('track show / hide in the track column, and the channel view', async ({ page }) => {
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await page.locator('.cm-content').click();
@@ -115,19 +115,19 @@ test('track show / hide in the legend, and the channel view', async ({ page }) =
   await page.keyboard.insertText('TR(1) CH(1) @41 l1 CC(7,90) c\nTR(2) CH(2) l1 o3 e\nTR(3) CH(10) l1 n36');
   const roll = page.getByTestId('piano-roll');
   const legend = page.getByRole('group', { name: /^トラック/ });
-  await expect(legend.locator('.roll-chip')).toHaveText(['TR1', 'TR2', 'TR3']);
+  await expect(legend.locator('.rail-label')).toHaveText(['TR1', 'TR2', 'TR3']);
 
   await page.getByRole('button', { name: '再生', exact: true }).click();
   await expect(page.getByTestId('player-state')).toHaveAttribute('data-state', 'playing', { timeout: 30_000 });
   await expect(roll).toHaveAttribute('data-active', '36,52,60');
   // hide TR2
-  await legend.getByRole('button', { name: 'TR2', exact: true }).click();
-  await expect(legend.getByRole('button', { name: 'TR2', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await legend.getByRole('button', { name: 'TR2 を表示' }).click();
+  await expect(legend.getByRole('button', { name: 'TR2 を表示' })).toHaveAttribute('aria-pressed', 'false');
   await expect(roll).toHaveAttribute('data-active', '36,60');
   // solo TR1, then show all again
-  await legend.getByRole('button', { name: 'TR1', exact: true }).click({ modifiers: ['Shift'] });
+  await legend.getByRole('button', { name: 'TR1 を表示' }).click({ modifiers: ['Shift'] });
   await expect(roll).toHaveAttribute('data-active', '60');
-  await legend.getByRole('button', { name: 'TR1', exact: true }).click({ modifiers: ['Shift'] });
+  await legend.getByRole('button', { name: 'TR1 を表示' }).click({ modifiers: ['Shift'] });
   await expect(roll).toHaveAttribute('data-active', '36,52,60');
 
   // channel view: every track has a row; the sounding keys per track
@@ -135,6 +135,14 @@ test('track show / hide in the legend, and the channel view', async ({ page }) =
   const monitor = page.getByTestId('channel-monitor');
   await expect(monitor).toHaveAttribute('aria-label', /3 トラック/);
   await expect(monitor).toHaveAttribute('data-active', 'TR1:60;TR2:52;TR3:36');
+  // the track column is the left part of each row (same 18 px header + 22 px rows) and works here too
+  const canvasTop = (await monitor.boundingBox())!.y;
+  const row3 = (await page.locator('.rail-row[data-track="TR3"]').boundingBox())!;
+  expect(Math.abs(row3.y - (canvasTop + 18 + 2 * 22))).toBeLessThan(1.5);
+  expect(row3.height).toBeCloseTo(22, 0);
+  await page.getByRole('button', { name: 'TR1 をミュート' }).click();
+  await expect(page.getByTestId('roll-panel')).toHaveAttribute('data-silenced', '0');
+  await page.getByRole('button', { name: 'TR1 をミュート' }).click();
   await page.getByRole('button', { name: '停止', exact: true }).click();
   // the chosen view is remembered
   await page.reload();

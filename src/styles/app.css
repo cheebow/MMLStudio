@@ -174,7 +174,6 @@ button, select, input { font: inherit; color: inherit; }
 .viz-tab[aria-selected='true'] { background: var(--accent); color: var(--accent-text); }
 .monitor-wrap { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .monitor-canvas { display: block; width: 100%; }
-.roll-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .roll-zoom { display: flex; gap: 4px; }
 .roll-zoom .small-btn { padding: 0 8px; line-height: 18px; }
 .roll-canvas-wrap { position: relative; flex: 1; min-height: 0; }
@@ -195,14 +194,31 @@ button, select, input { font: inherit; color: inherit; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 .app-header .doc-name { margin-left: auto; }
 
-/* Mute / solo and player mode (SPEC 6.4) */
-.roll-track { display: inline-flex; align-items: center; gap: 1px; }
-.roll-track.silenced .roll-chip { opacity: 0.45; }
-.mix-btn { border: 1px solid var(--border); border-radius: 3px; background: none; color: var(--muted); font: inherit; font-size: 10px; font-weight: 600; line-height: 14px; padding: 0 3px; cursor: pointer; }
-.mix-btn:hover { color: var(--text); }
-.mix-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.mix-btn.mute[aria-pressed='true'] { background: var(--error, #c0362c); border-color: var(--error, #c0362c); color: #fff; }
-.mix-btn.solo[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+/* Track column, mute / solo and player mode (SPEC 6.4) */
+.roll-spacer { flex: 1; }
+.viz-body { display: flex; flex: 1; min-height: 0; }
+.rail-scroll { flex: none; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; border-right: 1px solid var(--border); background: var(--editor-bg); }
+.track-rail { width: max-content; font-size: 11px; }
+.rail-head { display: flex; align-items: center; padding: 0 6px; color: var(--muted); font-size: 10px; border-bottom: 0.5px solid var(--border); box-sizing: border-box; }
+.rail-empty { padding: 4px 6px; }
+.rail-row { display: flex; align-items: center; gap: 3px; padding: 0 4px 0 0; box-sizing: border-box; }
+.rail-row:nth-child(odd) { background: rgba(0, 0, 0, 0.025); }
+.rail-show { flex: none; align-self: stretch; display: flex; align-items: center; gap: 5px; border: none; background: none; color: var(--text); font: inherit; padding: 0 4px 0 2px; cursor: pointer; text-align: left; }
+.rail-show:hover .rail-label { text-decoration: underline; }
+.rail-show:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.rail-bar { flex: none; width: 4px; height: 12px; border-radius: 1px; }
+.rail-label { width: 2.9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-row.off .rail-label, .rail-row.off .rail-bar { opacity: 0.35; }
+.rail-row.off .rail-label, .rail-row.off .rail-show:hover .rail-label { text-decoration: line-through; }
+.rail-row.silenced .rail-label { color: var(--muted); }
+.rail-btn { display: inline-grid; place-items: center; min-width: 18px; height: 16px; border: 1px solid var(--border); border-radius: 3px; background: none; color: var(--muted); font: inherit; font-size: 10px; font-weight: 600; line-height: 1; padding: 0 2px; cursor: pointer; }
+.rail-btn:hover { color: var(--text); }
+.rail-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.rail-btn.mute[aria-pressed='true'] { background: var(--error); border-color: var(--error); color: #fff; }
+.rail-btn.solo[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.monitor-rows { display: flex; align-items: flex-start; }
+.monitor-rows .track-rail { flex: none; border-right: 1px solid var(--border); background: var(--editor-bg); }
+.monitor-canvas-col { flex: 1; min-width: 0; }
 .mode-btn { white-space: nowrap; }
 .mode-btn[aria-pressed='true'] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .player-mode .workspace { grid-template-columns: minmax(0, 1fr); }
@@ -212,3 +228,4 @@ button, select, input { font: inherit; color: inherit; }
 .player-mode .roll-panel { flex: 1; min-height: 0; border-top: none; }
 .player-source { display: inline-flex; gap: 12px; font-size: 13px; align-items: center; }
 @media (max-width: 800px) { .player-mode .editor-pane { height: 75vh; } }
+@media (prefers-color-scheme: dark) { .rail-row:nth-child(odd) { background: rgba(255, 255, 255, 0.025); } }

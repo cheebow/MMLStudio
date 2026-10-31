@@ -2,9 +2,9 @@ import { useMemo, useState, type MouseEvent } from 'react';
 import type { SourceSpan } from '../engine';
 import { ChannelMonitor } from './ChannelMonitor';
 import { MAX_PPS, MIN_PPS, PianoRoll } from './PianoRoll';
-import { isSilenced, type Mix } from './mix';
+import type { Mix } from './mix';
 import type { RollData } from './roll-data';
-import { laneColor, prefersDark } from './viz-colors';
+import { TrackRail } from './TrackRail';
 
 type View = 'roll' | 'channels';
 
@@ -34,8 +34,8 @@ function readView(): View {
 }
 
 /**
- * The playback view below the editor (SPEC 6.3): piano roll or channel monitor, with a legend
- * whose buttons show / hide tracks (display only) and M / S buttons that mute / solo the audio (SPEC 6.4).
+ * The playback view below the editor (SPEC 6.3): piano roll or channel monitor, with the track column
+ * at the left that shows / hides tracks (display only) and mutes / solos them (audio, SPEC 6.4).
  */
 export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, sourceLabel, mix, onToggleMute, onToggleSolo, onClose }: Props) {
   const [view, setView] = useState<View>(readView);
@@ -44,7 +44,6 @@ export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, so
   const [hiddenLabels, setHiddenLabels] = useState<ReadonlySet<string>>(new Set());
   const labels = useMemo(() => data?.tracks.map((t) => t.label) ?? [], [data]);
   const hidden = useMemo(() => new Set(labels.flatMap((l, i) => (hiddenLabels.has(l) ? [i] : []))), [labels, hiddenLabels]);
-  const dark = prefersDark();
 
   const choose = (v: View) => {
     setView(v);
@@ -67,6 +66,9 @@ export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, so
       return next;
     });
   };
+  const rail = (
+    <TrackRail tracks={data?.tracks ?? []} hidden={hidden} mix={mix} onToggleShow={toggle} onToggleMute={onToggleMute} onToggleSolo={onToggleSolo} />
+  );
   const zoom = (factor: number) => setPps((v) => Math.min(MAX_PPS, Math.max(MIN_PPS, v * factor)));
 
   return (
@@ -86,42 +88,7 @@ export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, so
           </button>
         </span>
         <span className="muted small">{sourceLabel}</span>
-        <span className="roll-legend" role="group" aria-label="トラック（名前のクリックで表示・非表示、Shift＋クリックでそのトラックだけ表示。M でミュート、S でソロ）">
-          {data?.tracks.map((t, i) => (
-            <span key={`${t.label}-${i}`} className={`roll-track${isSilenced(mix, t.label) ? ' silenced' : ''}`}>
-              <button
-                type="button"
-                className="roll-chip"
-                aria-pressed={!hidden.has(i)}
-                title={`${t.label} の表示を切り替え（Shift＋クリックでこのトラックだけ表示）`}
-                onClick={(e) => toggle(e, t.label)}
-              >
-                <span className="roll-swatch" style={{ background: laneColor(i, t.drum, dark) }} />
-                {t.label}
-              </button>
-              <button
-                type="button"
-                className="mix-btn mute"
-                aria-pressed={mix.muted.has(t.label)}
-                aria-label={`${t.label} をミュート`}
-                title={`${t.label} の音を消す（もう一度で戻す）`}
-                onClick={() => onToggleMute(t.label)}
-              >
-                M
-              </button>
-              <button
-                type="button"
-                className="mix-btn solo"
-                aria-pressed={mix.soloed.has(t.label)}
-                aria-label={`${t.label} をソロ`}
-                title={`${t.label} をソロ（ソロのトラックだけ鳴らす。複数選べます）`}
-                onClick={() => onToggleSolo(t.label)}
-              >
-                S
-              </button>
-            </span>
-          ))}
-        </span>
+        <span className="roll-spacer" />
         {view === 'roll' && (
           <span className="roll-zoom">
             <button type="button" className="small-btn" aria-label="縮小" title="縮小（Ctrl＋ホイール / -）" onClick={() => zoom(1 / 1.25)}>
@@ -134,9 +101,12 @@ export function PlaybackPanel({ data, time, playing, canSeek, onSeek, onJump, so
         )}
       </div>
       {view === 'roll' ? (
-        <PianoRoll data={data} time={time} playing={playing} canSeek={canSeek} onSeek={onSeek} onJump={onJump} hidden={hidden} pps={pps} onZoom={zoom} />
+        <div className="viz-body">
+          <div className="rail-scroll">{rail}</div>
+          <PianoRoll data={data} time={time} playing={playing} canSeek={canSeek} onSeek={onSeek} onJump={onJump} hidden={hidden} pps={pps} onZoom={zoom} />
+        </div>
       ) : (
-        <ChannelMonitor data={data} time={time} hidden={hidden} />
+        <ChannelMonitor data={data} time={time} hidden={hidden} rail={rail} />
       )}
     </div>
   );

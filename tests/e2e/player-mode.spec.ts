@@ -73,7 +73,7 @@ test('player mode hides the editor, plays a dropped MIDI as it is, and is rememb
   await drop(page, SONG, 'first.mid');
   await expect(page.getByTestId('doc-name')).toHaveText('first.mid');
   await expect(page.getByRole('radio', { name: '元 MIDI' })).toBeChecked();
-  await expect(page.locator('.roll-legend')).toContainText('CH10');
+  await expect(page.locator('.track-rail')).toContainText('CH10');
   await expect(state(page)).not.toHaveAttribute('data-state', 'playing');
   await page.getByRole('button', { name: '再生', exact: true }).click();
   await expect(state(page)).toHaveAttribute('data-state', 'playing', { timeout: 30_000 });
